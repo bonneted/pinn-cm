@@ -1,0 +1,59 @@
+{
+    "os": "Windows-10-10.0.17763-SP0",
+    "python": "3.8.13",
+    "heartbeatAt": "2023-03-30T23:08:34.304036",
+    "startedAt": "2023-03-30T23:08:31.507405",
+    "docker": null,
+    "cuda": null,
+    "args": [
+        "--activation=sigmoid",
+        "--bc_type=hard",
+        "--loss_type=pde",
+        "--n_layers=3",
+        "--net_type=USnet",
+        "--num_samples=100",
+        "--size_layers=100",
+        "--train_distribution=Hammersley"
+    ],
+    "state": "running",
+    "program": "HPO_train.py",
+    "codePath": "HPO\\HPO_train.py",
+    "git": {
+        "remote": "https://gitlab.kuleuven.be/u0150568/pinn-cm",
+        "commit": "9dc32e41245e66f229b587f7dc5ac2f6adc52c79"
+    },
+    "email": null,
+    "root": "C:/Users/u0150568/PhD/code/pinn-cm",
+    "host": "SET-S-ME-XAD02",
+    "username": "u0150568",
+    "executable": "C:\\Users\\u0150568\\.conda\\envs\\torch-gpu\\python.exe",
+    "cpu_count": 64,
+    "cpu_count_logical": 128,
+    "cpu_freq": {
+        "current": 2196.0,
+        "min": 0.0,
+        "max": 2196.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 2196.0,
+            "min": 0.0,
+            "max": 2196.0
+        }
+    ],
+    "disk": {
+        "total": 1036.5244102478027,
+        "used": 724.8941917419434
+    },
+    "gpu": "Tesla V100-PCIE-32GB",
+    "gpu_count": 1,
+    "gpu_devices": [
+        {
+            "name": "Tesla V100-PCIE-32GB",
+            "memory_total": 34359738368
+        }
+    ],
+    "memory": {
+        "total": 511.6820602416992
+    }
+}

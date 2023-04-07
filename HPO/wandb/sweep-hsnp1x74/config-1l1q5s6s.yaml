@@ -1,0 +1,18 @@
+wandb_version: 1
+
+activation:
+  value: sigmoid
+bc_type:
+  value: hard
+loss_type:
+  value: pde
+n_layers:
+  value: 4
+net_type:
+  value: USnet
+num_samples:
+  value: 100
+size_layers:
+  value: 100
+train_distribution:
+  value: Hammersley
