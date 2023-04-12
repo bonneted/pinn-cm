@@ -4,7 +4,7 @@ This repository contains the code used to generate the results of the conference
 It relies on the DeepXDE library (github.com/lululxvi/deepxde).
 
 We address the boundary value problem introduced in [1] that has an analytical solution (considering linear elasticity).
-We consider the unit square domain : $\Omega = [0,1]^2$, on which the continuum mechanics equations applies :
+We consider the unit square domain: $\Omega = [0,1]^2$, on which the continuum mechanics equations applies :
 
 $\epsilon_{ij} = \frac{1}{2}(u_{i,j}+u_{j,i}) $\
 $\sigma_{ij} =  \lambda \epsilon_{ij} \delta{ij} + 2 \mu \epsilon_{ij}$\
@@ -15,7 +15,7 @@ The boundary conditions are summarized in the image below, and the body forces a
 $fx = \lambda \left(- \pi Q y^{3} \cos{\left(\pi x \right)} + 4 \pi^{2} \sin{\left(2 \pi y \right)} \cos{\left(2 \pi x \right)}\right) + \mu \left(- \pi Q y^{3} \cos{\left(\pi x \right)} + 9 \pi^{2} \sin{\left(\pi y \right)}\right)$\
 $fy = \lambda \left(- 3 Q y^{2} \sin{\left(\pi x \right)} + 2 \pi^{2} \sin{\left(2 \pi x \right)} \cos{\left(\pi y \right)}\right) + \mu \left(\frac{\pi^{2} Q y^{4} \sin{\left(\pi x \right)}}{16} - 6 Q y^{2} \sin{\left(\pi x \right)} + 2 \pi^{2} \sin{\left(2 \pi x \right)} \cos{\left(\pi y \right)}\right)$
 
-![](figures/BVP_problem.png "Boundary conditions of the problem")
+![](figures/BVP_problem.png "Boundary conditions of the problem" | width=100)
 
 A simplified version of the problem is first considered, with only Dirichlet boundary conditions. 
 The PINN converges to the analytical solution, with a final error of about 1e-5 (see results/simplified_BVP/).
@@ -23,8 +23,8 @@ This proves that the neural network has enough capacity to learn the solution.
 
 The mixed boundary value problem is then considered, with both Dirichlet and Neumann boundary conditions.
 Two implementations are considered (as illustrated in the image below): 
-- direct implementation (left), where displacement is predicted by the PINN and stress is then computed using the constitutive law
-- parallel implementation (right), where the PINN predicts both displacement and stress, the constitutive law is enforced "softly" using an extra loss term
+- direct implementation, where displacement is predicted by the PINN and stress is then computed using the constitutive law
+- parallel implementation, where the PINN predicts both displacement and stress, the constitutive law is enforced "softly" using an extra loss term
 
 ![](figures/PINN_implementation.png "Two possible implementations of PINNs for continuum mechanics: direct (left) and parallel (right)")
 
