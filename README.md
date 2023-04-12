@@ -17,7 +17,9 @@ The boundary conditions are summarized in the image below, and the body forces a
 $fx = \lambda \left(- \pi Q y^{3} \cos{\left(\pi x \right)} + 4 \pi^{2} \sin{\left(2 \pi y \right)} \cos{\left(2 \pi x \right)}\right) + \mu \left(- \pi Q y^{3} \cos{\left(\pi x \right)} + 9 \pi^{2} \sin{\left(\pi y \right)}\right)$\
 $fy = \lambda \left(- 3 Q y^{2} \sin{\left(\pi x \right)} + 2 \pi^{2} \sin{\left(2 \pi x \right)} \cos{\left(\pi y \right)}\right) + \mu \left(\frac{\pi^{2} Q y^{4} \sin{\left(\pi x \right)}}{16} - 6 Q y^{2} \sin{\left(\pi x \right)} + 2 \pi^{2} \sin{\left(2 \pi x \right)} \cos{\left(\pi y \right)}\right)$
 
-![](figures/BVP_problem.png "Boundary conditions of the problem")
+<p align="center">
+<img src="figures/BVP_problem.png" title="Boundary conditions of the problem" width="80%">
+</p>
 
 ### Simplified BVP
 A simplified version of the problem is first considered, with only Dirichlet boundary conditions. 
@@ -31,10 +33,13 @@ Two implementations are considered (as illustrated in the image below):
 - direct implementation (left), where displacement is predicted by the PINN and stress is then computed using the constitutive law
 - parallel implementation (right), where the PINN predicts both displacement and stress, the constitutive law is enforced "softly" using an extra loss term
 
-![](figures/PINN_implementation.png "Two possible implementations of PINNs for continuum mechanics: direct (left) and parallel (right)")
+<p align="center">
+<img src="figures/PINN_implementation.png" title="Two possible implementations of PINNs for continuum mechanics: direct (left) and parallel (right)" width="60%">
+</p>
 
 The convergence is not as good as in the simplified problem, with a final error of about 5e-3 (see results/mixed_BVP/).
 
+### Hyperparameter optimization
 To improve the accuracy, we perform hyperparameter optimization using Weights & Biases (wandb.com). The results are available in this [W&B report](https://api.wandb.ai/links/damien-bonnet/2ok0l39j)
 The minimum error reached is about 3e-3, which is a small improvement, but still far from the accuracy of the simplified problem.
 The model seems stuck in a local minimum due to the mixed boundary conditions (the model is capable enough to learn the solution, as shown in the simplified problem).
