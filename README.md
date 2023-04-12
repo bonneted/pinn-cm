@@ -6,16 +6,16 @@ It relies on the DeepXDE library (github.com/lululxvi/deepxde).
 We address the boundary value problem introduced in [1] that has an analytical solution (considering linear elasticity).
 We consider the unit square domain : $\Omega = [0,1]^2$, on which the continuum mechanics equations applies :
 
-$ \epsilon_{ij} = \frac{1}{2}(u_{i,j}+u_{j,i}) $\
-$ \sigma_{ij} =  \lambda \epsilon_{ij} \delta{ij} + 2 \mu \epsilon_{ij}$\
-$ \sigma_{ij,j} + f_{i} = 0 $
+$\epsilon_{ij} = \frac{1}{2}(u_{i,j}+u_{j,i}) $\
+$\sigma_{ij} =  \lambda \epsilon_{ij} \delta{ij} + 2 \mu \epsilon_{ij}$\
+$\sigma_{ij,j} + f_{i} = 0 $
 
-The boundary conditions are summarized in the image below 1, and the body forces are chosen on purpose so that there can be an analytical solution :
+The boundary conditions are summarized in the image below, and the body forces are chosen on purpose so that there can be an analytical solution :
 
 $fx = \lambda \left(- \pi Q y^{3} \cos{\left(\pi x \right)} + 4 \pi^{2} \sin{\left(2 \pi y \right)} \cos{\left(2 \pi x \right)}\right) + \mu \left(- \pi Q y^{3} \cos{\left(\pi x \right)} + 9 \pi^{2} \sin{\left(\pi y \right)}\right)$\
 $fy = \lambda \left(- 3 Q y^{2} \sin{\left(\pi x \right)} + 2 \pi^{2} \sin{\left(2 \pi x \right)} \cos{\left(\pi y \right)}\right) + \mu \left(\frac{\pi^{2} Q y^{4} \sin{\left(\pi x \right)}}{16} - 6 Q y^{2} \sin{\left(\pi x \right)} + 2 \pi^{2} \sin{\left(2 \pi x \right)} \cos{\left(\pi y \right)}\right)$
 
-![](figures/BVP_problem.png)
+![](figures/BVP_problem.png "Boundary conditions of the problem" | width=100)
 
 A simplified version of the problem is first considered, with only Dirichlet boundary conditions. 
 The PINN converges to the analytical solution, with a final error of about 1e-5 (see results/simplified_BVP/).
@@ -26,7 +26,7 @@ Two implementations are considered (as illustrated in the image below):
 - direct implementation, where displacement is predicted by the PINN and stress is then computed using the constitutive law
 - parallel implementation, where the PINN predicts both displacement and stress, the constitutive law is enforced "softly" using an extra loss term
 
-![](figures/PINN_implementation.png)
+![](figures/PINN_implementation.png "Two possible implementations of PINNs for continuum mechanics: direct (left) and parallel (right)")
 
 The convergence is not as good as in the simplified problem, with a final error of about 5e-3 (see results/mixed_BVP/).
 
@@ -38,20 +38,20 @@ This encourages further investigation of better ways to implement the mixed boun
 [1] Haghighat, Ehsan, Maziar Raissi, Adrian Moure, Hector Gomez, and Ruben Juanes. “A Deep Learning Framework for Solution and Discovery in Solid Mechanics.” 
 
 ## Structure
-pinn-cm/
-├── figures/ # figures used in the README and the notebooks
-├── HPO/ # hyperparameter optimization
-│   ├── HPO.ipynb # hyperparameter optimization for the mixed BVP
-│   ├── mixed_BVP.py # mixed BVP functions (identical to the ones in the notebook)
-│   └── wandb/ # runs stored using Weights & Biases
-├── inverse identification/ # inverse identification of the material parameters
-│   └── linear_elasticity.ipynb
-├── results/ # results of the notebooks
-│   ├── mixed_BVP 
-│   └── simplified_BVP 
-├── analytical_solution.ipynb # analytical solution of the problem using Sympy (symbolic math)
-├── mixed_BVP.ipynb # mixed boundary value problem
-└── simplified_BVP.ipynb # simplified boundary value problem (only Dirichlet BCs)
+    pinn-cm/
+    ├── figures/ # figures used in the README and the notebooks
+    ├── HPO/ # hyperparameter optimization
+    │   ├── HPO.ipynb # hyperparameter optimization for the mixed BVP
+    │   ├── mixed_BVP.py # mixed BVP functions (identical to the ones in the notebook)
+    │   └── wandb/ # runs stored using Weights & Biases
+    ├── inverse identification/ # inverse identification of the material parameters
+    │   └── linear_elasticity.ipynb
+    ├── results/ # results of the notebooks
+    │   ├── mixed_BVP 
+    │   └── simplified_BVP 
+    ├── analytical_solution.ipynb # analytical solution of the problem using Sympy (symbolic math)
+    ├── mixed_BVP.ipynb # mixed boundary value problem
+    └── simplified_BVP.ipynb # simplified boundary value problem (only Dirichlet BCs)
 
 ## Author
 Damien Bonnet-Eymard
