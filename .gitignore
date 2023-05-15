@@ -1,4 +1,4 @@
 .ipynb_checkpoints
 .vscode
-hpo/wandb/
+wandb/
 __pycache__/
