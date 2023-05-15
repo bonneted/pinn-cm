@@ -46,6 +46,7 @@ The model seems stuck in a local minimum due to the mixed boundary conditions (t
 This encourages further investigation of better ways to implement the mixed boundary conditions in the PINN framework.
 
 ## Structure
+
     pinn-cm/
     ├── figures/ # figures used in the README and the notebooks
     ├── HPO/ # hyperparameter optimization
@@ -53,13 +54,15 @@ This encourages further investigation of better ways to implement the mixed boun
     │   ├── mixed_BVP.py # mixed BVP functions (identical to the ones in the notebook)
     │   └── wandb/ # runs stored using Weights & Biases
     ├── inverse identification/ # inverse identification of the material parameters
-    │   └── linear_elasticity.ipynb
-    ├── results/ # results of the notebooks
-    │   ├── mixed_BVP 
-    │   └── simplified_BVP 
-    ├── analytical_solution.ipynb # analytical solution of the problem using Sympy (symbolic math)
-    ├── mixed_BVP.ipynb # mixed boundary value problem
-    └── simplified_BVP.ipynb # simplified boundary value problem (only Dirichlet BCs)
+    │   ├── linear_elasticity.ipynb
+    │   └── BVP_function.py
+    └── forward/
+        ├── results/ # results of forward application notebooks
+        │   ├── mixed_BVP
+        │   └── simplified_BVP
+        ├── analytical_solution.ipynb # analytical solution of the problem using Sympy (symbolic math)
+        ├── mixed_BVP.ipynb # mixed boundary value problem
+        └── simplified_BVP.ipynb # simplified boundary value problem (only Dirichlet BCs)
 
 ## Author
 Damien Bonnet-Eymard
