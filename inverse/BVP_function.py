@@ -10,22 +10,24 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # device = torch.device("cpu")
 # print(f"Using GPU: {torch.cuda.is_available()}")
 
-lmbd = 1.0
-mu = 0.5
-Q = 4.0
+# lmbd = 1.0
+# mu = 0.5
+# Q = 4.0
 
-domain = np.array([[0.0, 1.0], [0.0, 1.0]])
-geom = dde.geometry.Rectangle([0, 0], [1, 1])
+# domain = np.array([[0.0, 1.0], [0.0, 1.0]])
+# geom = dde.geometry.Rectangle([0, 0], [1, 1])
 
 
-def U_exact(X):
+def U_exact(X,params):
+    Q = params["Q"]
     x, y = X[:,0], X[:,1]
     #displacement U
     Ux = np.cos(2*np.pi*x) * np.sin(np.pi*y)
     Uy = np.sin(np.pi*x) * Q * y**4/4
     return np.hstack((Ux.reshape(-1,1),Uy.reshape(-1,1)))
 
-def E_exact(X):
+def E_exact(X,params):
+    Q = params["Q"]
     #strain E
     x, y = X[:,0], X[:,1]
     Exx = -2*np.pi*np.sin(2*np.pi*x)*np.sin(np.pi*y)
@@ -33,7 +35,9 @@ def E_exact(X):
     Exy = 0.5*(np.pi*np.cos(2*np.pi*x)*np.cos(np.pi*y) + np.pi*np.cos(np.pi*x)*Q*y**4/4)
     return (Exx, Eyy, Exy)
 
-def S_exact(X):
+def S_exact(X,params):
+    lmbd = params["lmbd"]
+    mu = params["mu"]
     #stress S
     Sxx = (lmbd + 2*mu) * E_exact(X)[0] + lmbd * E_exact(X)[1]
     Syy = (lmbd + 2*mu) * E_exact(X)[1] + lmbd * E_exact(X)[0]
@@ -115,7 +119,10 @@ def plot_field(domain,model,output_func=None,V_exact=None,plot_diff=False,n_poin
     return fig
 
 
-def bodyf(X, mu, lmbd):
+def bodyf(X, params):
+    Q = params["Q"]
+    lmbd = params["lmbd"]
+    mu = params["mu"]
     #body force
     x, y = X[:,0:1], X[:,1:2]
     fx = lmbd*(4*torch.pi**2*torch.cos(2*torch.pi*x)*torch.sin(torch.pi*y)-torch.pi*torch.cos(torch.pi*x)*Q*y**3) \
@@ -133,14 +140,16 @@ def E_nn(X,U):
     Exy = 0.5 * (dde.grad.jacobian(U, X, i=1, j=0) +dde.grad.jacobian(U, X, i=0, j=1))
     return Exx, Eyy, Exy
 
-def S_nn(E):
+def S_nn(E,params):
+    lmbd = params["lmbd"]
+    mu = params["mu"]
     #calculate the stress given the strain
     Sxx = (2 * mu + lmbd) * E[0] + lmbd * E[1]
     Syy = (2 * mu + lmbd) * E[1] + lmbd * E[0] 
     Sxy = 2 * mu * E[2]
     return Sxx, Syy, Sxy
 
-def PDE(X,S):
+def PDE(X,S,params):
     """
     the PDE of the problem (momentum balance)
     X is the spatial coordinate of shape (N,2) (x,y) 
@@ -155,14 +164,14 @@ def PDE(X,S):
     dSxy_x = dde.grad.jacobian(S, X, i=2, j=0)
     dSxy_y = dde.grad.jacobian(S, X, i=2, j=1)
     
-    fx, fy = bodyf(X, mu, lmbd)
+    fx, fy = bodyf(X, params)
 
     momentum_x = dSxx_x + dSxy_y + fx
     momentum_y = dSyy_y + dSxy_x + fy
     
     return [momentum_x, momentum_y]
 
-def E_potential(U,E,S,bodyf):
+def E_potential(X,U,S,params):
     """
     calculate the potential energy of the system
     U is the displacement tensor of shape (N,2) U[:,0] = Ux, U[:,1] = Uy
@@ -170,18 +179,21 @@ def E_potential(U,E,S,bodyf):
     S is the stress of list of length 3 (Sxx, Syy, Sxy)
     bodyf is the body force of list of length 2 (fx, fy)
     """
+    E = E_nn(X,U)
     strain_energy = 0.5 * (S[0]*E[0] + S[1]*E[1] + 2*S[2]*E[2])
+    fx, fy = bodyf(X, params)
     bodyf_work = U[:,0:1] * bodyf[0] + U[:,1:2] * bodyf[1]
     E_pot = strain_energy - bodyf_work
     return E_pot
 
-def Material_error(E,S,lmbd,mu):
+def Material_error(E,S,params):
     """
     calculate the material behavior error
     E is the strain of list of length 3 (Exx, Eyy, Exy)
     S is the stress of list of length 3 (Sxx, Syy, Sxy)
-    lmbd and mu are the material properties for linear elasticity
+    params is a dictionary containing the material parameters
     """
+    lmbd, mu = params["lmbd"], params["mu"]
     Sxx, Syy, Sxy = S
     
     Sxx_pred = (2 * mu + lmbd) * E[0] + lmbd * E[1]
@@ -192,113 +204,117 @@ def Material_error(E,S,lmbd,mu):
     return Material_error
 
 
-#Unet : displacement u_x and u_y are the output of the network
-def PDE_Unet(x,net_output):
-    """"
-    x: input tensor of shape (N,2), the spatial coordinates x and y
-    u: output tensor of shape (N,2), the displacement u_x and u_y
-    return: the PDE loss
-    """
-    E = E_nn(x,net_output)
-    S = S_nn(E)
-    pde = PDE(x,S)
-    return pde
-
-def Epot_Unet(x,net_output):
-    """"
-    x: input tensor of shape (N,2), the spatial coordinates x and y
-    u: output tensor of shape (N,2), the displacement u_x and u_y
-    return: the potential energy
-    """
-    E = E_nn(x,net_output)
-    S = S_nn(E)
-    bodyf_val = bodyf(x, mu, lmbd)
-    E_pot = E_potential(net_output,E,S,bodyf_val)
-    return [E_pot]
-
-#USnet : displacement u_x, u_y, and stress S_xx, S_yy, S_xy are the output of the network
-
-def PDE_USnet(x,net_output):
-    """"
-    x: input tensor of shape (N,2), the spatial coordinates x and y
-    net_output: output tensor of shape (N,5), the displacement u_x, u_y, the strain E_xx, E_yy, E_xy
-    return: the PDE associated with the network
-    """
-    S = net_output[:,2], net_output[:,3], net_output[:,4]
-    pde = PDE(x,S)
-    return pde
-
-def Epot_USnet(x,net_output):
-    """
-    x: input tensor of shape (N,2), the spatial coordinates x and y
-    u: output tensor of shape (N,2), the displacement u_x and u_y
-    return: the potential energy associated with the network
-    """
-    U = torch.hstack((net_output[:,0].reshape(-1,1),net_output[:,1].reshape(-1,1)))
-    E = E_nn(x,U)
-    S = S_nn(E)
-    bodyf_val = bodyf(x, mu, lmbd)
-    E_pot = E_potential(U,E,S,bodyf_val)
-    return [E_pot]
-
-def MaterialError_USnet(x,net_output):
-
-    U = torch.hstack((net_output[:,0].reshape(-1,1),net_output[:,1].reshape(-1,1)))
-    E = E_nn(x,U)
-    S = net_output[:,2].reshape(-1,1), net_output[:,3].reshape(-1,1), net_output[:,4].reshape(-1,1)
-
-    return [Material_error(E,S,lmbd,mu)]
-
-
-#Hard boundary conditions for Unet and USnet (for Unet, hard BCs are applied to displacement only -> soft BCs must be additionnaly applied to stress)
-def HardBC_Unet(x,net_output):  
-    Ux = net_output[:,0]*x[:,1]*(1-x[:,1])
-    Uy = net_output[:,1]*x[:,0]*(1-x[:,0])*x[:,1]
-    return torch.hstack((Ux.reshape(-1,1),Uy.reshape(-1,1))) 
-
-def HardBC_USnet(x,net_output):
-    Ux = net_output[:,0]*x[:,1]*(1-x[:,1])
-    Uy = net_output[:,1]*x[:,0]*(1-x[:,0])*x[:,1]
-
-    Sxx = net_output[:,2]*x[:,0]*(1-x[:,0])
-    Syy = net_output[:,3]*(1-x[:,1]) + (lmbd + 2*mu)*Q*torch.sin(torch.pi*x[:,0])
-    Sxy = net_output[:,4] 
-    return torch.hstack((Ux.reshape(-1,1),Uy.reshape(-1,1),Sxx.reshape(-1,1),Syy.reshape(-1,1),Sxy.reshape(-1,1))) 
-
-#Soft boundary conditions
-def boundary_Ux(x,_):
-    return np.isclose(x[1], 0) or np.isclose(x[1], 1)
-
-def boundary_Uy(x,_):
-    return np.isclose(x[0], 0) or np.isclose(x[0], 1) or np.isclose(x[1], 0)
-
-def boundary_Sxx(x,_):
-    return np.isclose(x[0], 0) or np.isclose(x[0], 1)
-
-def boundary_Syy(x,_):
-    return np.isclose(x[1], 1)
-
-def BCvalue_Syy(x):
-    return (lmbd + 2*mu)*Q*torch.sin(torch.pi*x[:,0])
-
-def Sxx_Unet(inputs, outputs, X):
-    E_pred = E_nn(inputs,outputs)
-    S_pred = S_nn(E_pred)
-    Sxx_pred = S_pred[0]
-    return torch.square(Sxx_pred)
-
-def Syy_Unet(inputs, outputs, X):
-    E_pred = E_nn(inputs,outputs)
-    S_pred = S_nn(E_pred)
-    Syy_pred = S_pred[1].squeeze()
-    return torch.square(Syy_pred - BCvalue_Syy(inputs))
-
 #setup the network architecture (loss and BCs)
-def net_setup(net,net_type,bc_type,loss_type):
+def net_setup(net,net_type,bc_type,loss_type,geom,phy_params):
+
+    #Unet : displacement u_x and u_y are the output of the network
+    def PDE_Unet(x,net_output):
+        """"
+        x: input tensor of shape (N,2), the spatial coordinates x and y
+        u: output tensor of shape (N,2), the displacement u_x and u_y
+        return: the PDE loss
+        """
+        E = E_nn(x,net_output)
+        S = S_nn(E,phy_params)
+        pde = PDE(x,S)
+        return pde
+
+    def Epot_Unet(x,net_output):
+        """"
+        x: input tensor of shape (N,2), the spatial coordinates x and y
+        u: output tensor of shape (N,2), the displacement u_x and u_y
+        return: the potential energy
+        """
+        E = E_nn(x,net_output)
+        S = S_nn(E,phy_params)
+        E_pot = E_potential(x,net_output,S)
+        return [E_pot]
+
+    #USnet : displacement u_x, u_y, and stress S_xx, S_yy, S_xy are the output of the network
+
+    def PDE_USnet(x,net_output):
+        """"
+        x: input tensor of shape (N,2), the spatial coordinates x and y
+        net_output: output tensor of shape (N,5), the displacement u_x, u_y, the strain E_xx, E_yy, E_xy
+        return: the PDE associated with the network
+        """
+        S = net_output[:,2], net_output[:,3], net_output[:,4]
+        pde = PDE(x,S)
+        return pde
+
+    def Epot_USnet(x,net_output):
+        """
+        x: input tensor of shape (N,2), the spatial coordinates x and y
+        u: output tensor of shape (N,2), the displacement u_x and u_y
+        return: the potential energy associated with the network
+        """
+        U = torch.hstack((net_output[:,0].reshape(-1,1),net_output[:,1].reshape(-1,1)))
+        E = E_nn(x,U)
+        S = S_nn(E,phy_params)
+        bodyf_val = bodyf(x,phy_params)
+        E_pot = E_potential(U,E,S,bodyf_val)
+        return [E_pot]
+
+    def MaterialError_USnet(x,net_output):
+
+        U = torch.hstack((net_output[:,0].reshape(-1,1),net_output[:,1].reshape(-1,1)))
+        E = E_nn(x,U)
+        S = net_output[:,2].reshape(-1,1), net_output[:,3].reshape(-1,1), net_output[:,4].reshape(-1,1)
+
+        return [Material_error(E,S,phy_params)]
+
+    #Hard boundary conditions for Unet and USnet (for Unet, hard BCs are applied to displacement only -> soft BCs must be additionnaly applied to stress)
+    def HardBC_Unet(x,net_output):  
+        Ux = net_output[:,0]*x[:,1]*(1-x[:,1])
+        Uy = net_output[:,1]*x[:,0]*(1-x[:,0])*x[:,1]
+        return torch.hstack((Ux.reshape(-1,1),Uy.reshape(-1,1))) 
+
+    def HardBC_USnet(x,net_output):
+        lmbd, mu, Q = phy_params["lmbd"], phy_params["mu"], phy_params["Q"]
+
+        Ux = net_output[:,0]*x[:,1]*(1-x[:,1])
+        Uy = net_output[:,1]*x[:,0]*(1-x[:,0])*x[:,1]
+
+        Sxx = net_output[:,2]*x[:,0]*(1-x[:,0])
+        Syy = net_output[:,3]*(1-x[:,1]) + (lmbd + 2*mu)*Q*torch.sin(torch.pi*x[:,0])
+        Sxy = net_output[:,4] 
+        return torch.hstack((Ux.reshape(-1,1),Uy.reshape(-1,1),Sxx.reshape(-1,1),Syy.reshape(-1,1),Sxy.reshape(-1,1))) 
+
+    #Soft boundary conditions
+    def boundary_Ux(x,_):
+        return np.isclose(x[1], 0) or np.isclose(x[1], 1)
+
+    def boundary_Uy(x,_):
+        return np.isclose(x[0], 0) or np.isclose(x[0], 1) or np.isclose(x[1], 0)
+
+    def boundary_Sxx(x,_):
+        return np.isclose(x[0], 0) or np.isclose(x[0], 1)
+
+    def boundary_Syy(x,_):
+        return np.isclose(x[1], 1)
+
+    def BCvalue_Syy(x):
+        lmbd, mu, Q = phy_params["lmbd"], phy_params["mu"], phy_params["Q"]
+        return (lmbd + 2*mu)*Q*torch.sin(torch.pi*x[:,0])
+
+    def Sxx_Unet(inputs, outputs, X):
+        E_pred = E_nn(inputs,outputs)
+        S_pred = S_nn(E_pred,phy_params)
+        Sxx_pred = S_pred[0]
+        return torch.square(Sxx_pred)
+
+    def Syy_Unet(inputs, outputs, X):
+        E_pred = E_nn(inputs,outputs)
+        S_pred = S_nn(E_pred,phy_params)
+        Syy_pred = S_pred[1].squeeze()
+        return torch.square(Syy_pred - BCvalue_Syy(inputs))
+
     if net_type == 'Unet':
         bc_Sxx = dde.icbc.OperatorBC(geom, Sxx_Unet, boundary_Sxx)
         bc_Syy = dde.icbc.OperatorBC(geom, Syy_Unet, boundary_Syy)
         if bc_type == 'soft':
+            bc_Ux = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_Ux, component=0)
+            bc_Uy = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_Uy, component=1)
             bc = [bc_Ux,bc_Uy,bc_Sxx,bc_Syy]
         elif bc_type == 'hard':
             bc = [bc_Sxx,bc_Syy] #Soft BCs for stress
@@ -314,6 +330,8 @@ def net_setup(net,net_type,bc_type,loss_type):
     elif net_type == 'USnet':
         #BCs  
         if bc_type == 'soft':
+            bc_Ux = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_Ux, component=0)
+            bc_Uy = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_Uy, component=1)
             bc_Sxx = dde.NeumannBC(geom, lambda x: 0, boundary_Sxx, component=2)
             bc_Syy = dde.NeumannBC(geom, BCvalue_Syy, boundary_Syy, component=3)
             bc = [bc_Ux,bc_Uy,bc_Sxx,bc_Syy]
@@ -330,35 +348,41 @@ def net_setup(net,net_type,bc_type,loss_type):
 
     return net,total_loss,bc,pde_net,energy_net,mat_net
 
-#Unet exact solution
-def Unet_exact(x,lib='np'):
-    if lib == 'torch':
-        cos,sin,pi,hstack = torch.cos,torch.sin,torch.pi,torch.hstack
-    elif lib == 'np':
-        cos,sin,pi,hstack = np.cos,np.sin,np.pi,np.hstack
-    # ground truth displacement
-    Ux = cos(2*pi*x[:,0]) * sin(pi*x[:,1])
-    Uy = sin(pi*x[:,0]) * Q * x[:,1]**4/4
-    return hstack((Ux.reshape(-1,1),Uy.reshape(-1,1))) 
+#Exact solution
+def set_exact_solution(net_type,params):
+    Q = params['Q']
 
-#USnet exact solution
-def USnet_exact(x,lib='np'):
-    # ground truth output of the network
-    if lib == 'torch':
-        cos,sin,pi,hstack = torch.cos,torch.sin,torch.pi,torch.hstack
-    elif lib == 'np':
-        cos,sin,pi,hstack = np.cos,np.sin,np.pi,np.hstack
+    #Unet exact solution
+    def Unet_exact(x,lib='np'):
+        if lib == 'torch':
+            cos,sin,pi,hstack = torch.cos,torch.sin,torch.pi,torch.hstack
+        elif lib == 'np':
+            cos,sin,pi,hstack = np.cos,np.sin,np.pi,np.hstack
+        # ground truth displacement
+        Ux = cos(2*pi*x[:,0]) * sin(pi*x[:,1])
+        Uy = sin(pi*x[:,0]) * Q * x[:,1]**4/4
+        return hstack((Ux.reshape(-1,1),Uy.reshape(-1,1))) 
 
-    Ux = cos(2*pi*x[:,0]) * sin(pi*x[:,1])
-    Uy = sin(pi*x[:,0]) * Q * x[:,1]**4/4
-    Exx = -2*pi*sin(2*pi*x[:,0])*sin(pi*x[:,1])
-    Eyy = sin(pi*x[:,0])*Q*x[:,1]**3
-    Exy = 0.5*(pi*cos(2*pi*x[:,0])*cos(pi*x[:,1]) + pi*cos(pi*x[:,0])*Q*x[:,1]**4/4)
-    S = S_nn((Exx,Eyy,Exy))
-    Sxx, Syy, Sxy = S[0], S[1], S[2]
-    return hstack((Ux.reshape(-1,1),Uy.reshape(-1,1),Sxx.reshape(-1,1),Syy.reshape(-1,1),Sxy.reshape(-1,1))) 
+    #USnet exact solution
+    def USnet_exact(x,lib='np'):
+        # ground truth output of the network
+        if lib == 'torch':
+            cos,sin,pi,hstack = torch.cos,torch.sin,torch.pi,torch.hstack
+        elif lib == 'np':
+            cos,sin,pi,hstack = np.cos,np.sin,np.pi,np.hstack
 
-def model_setup(geom,config):
+        Ux = cos(2*pi*x[:,0]) * sin(pi*x[:,1])
+        Uy = sin(pi*x[:,0]) * Q * x[:,1]**4/4
+        Exx = -2*pi*sin(2*pi*x[:,0])*sin(pi*x[:,1])
+        Eyy = sin(pi*x[:,0])*Q*x[:,1]**3
+        Exy = 0.5*(pi*cos(2*pi*x[:,0])*cos(pi*x[:,1]) + pi*cos(pi*x[:,0])*Q*x[:,1]**4/4)
+        S = S_nn((Exx,Eyy,Exy),params)
+        Sxx, Syy, Sxy = S[0], S[1], S[2]
+        return hstack((Ux.reshape(-1,1),Uy.reshape(-1,1),Sxx.reshape(-1,1),Syy.reshape(-1,1),Sxy.reshape(-1,1))) 
+
+    return Unet_exact if net_type == 'Unet' else USnet_exact
+
+def model_setup(geom,config,phy_params):
     net_type = config['net_type']
     n_layers = config['n_layers']
     size_layers = config['size_layers']
@@ -369,11 +393,11 @@ def model_setup(geom,config):
     bc_type = config['bc_type']
     num_boundary = config['num_boundary']
     
-    net_exact = Unet_exact if net_type == 'Unet' else USnet_exact
+    net_exact = set_exact_solution(net_type,phy_params)
     size_output = 2 if net_type == 'Unet' else 5
 
     net = dde.nn.FNN([2] + [size_layers]*n_layers + [size_output], activation, 'Glorot uniform')
-    net, total_loss, bc, pde_net, energy_net, mat_net = net_setup(net, net_type, bc_type, loss_type)
+    net, total_loss, bc, pde_net, energy_net, mat_net = net_setup(net, net_type, bc_type, loss_type,geom,phy_params)
 
     data = dde.data.PDE(
         geom,
@@ -386,7 +410,7 @@ def model_setup(geom,config):
         solution=net_exact,
     )
     model = dde.Model(data, net)
-    return model
+    return model, net_exact, pde_net, energy_net, mat_net
 
 def train_model(model,config,callbacks = [],model_save_path = None):
     learning_rates = config['learning_rates']
