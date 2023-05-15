@@ -141,8 +141,8 @@ def E_nn(X,U):
     return Exx, Eyy, Exy
 
 def S_nn(E,params):
-    lmbd = params["lmbd"]
-    mu = params["mu"]
+    lmbd = params["lmbd"].detach()
+    mu = params["mu"].detach()
     #calculate the stress given the strain
     Sxx = (2 * mu + lmbd) * E[0] + lmbd * E[1]
     Syy = (2 * mu + lmbd) * E[1] + lmbd * E[0] 
@@ -216,7 +216,7 @@ def net_setup(net,net_type,bc_type,loss_type,geom,phy_params):
         """
         E = E_nn(x,net_output)
         S = S_nn(E,phy_params)
-        pde = PDE(x,S)
+        pde = PDE(x,S,phy_params)
         return pde
 
     def Epot_Unet(x,net_output):
@@ -227,7 +227,7 @@ def net_setup(net,net_type,bc_type,loss_type,geom,phy_params):
         """
         E = E_nn(x,net_output)
         S = S_nn(E,phy_params)
-        E_pot = E_potential(x,net_output,S)
+        E_pot = E_potential(x,net_output,S,phy_params)
         return [E_pot]
 
     #USnet : displacement u_x, u_y, and stress S_xx, S_yy, S_xy are the output of the network
@@ -239,7 +239,7 @@ def net_setup(net,net_type,bc_type,loss_type,geom,phy_params):
         return: the PDE associated with the network
         """
         S = net_output[:,2], net_output[:,3], net_output[:,4]
-        pde = PDE(x,S)
+        pde = PDE(x,S,phy_params)
         return pde
 
     def Epot_USnet(x,net_output):
@@ -252,7 +252,7 @@ def net_setup(net,net_type,bc_type,loss_type,geom,phy_params):
         E = E_nn(x,U)
         S = S_nn(E,phy_params)
         bodyf_val = bodyf(x,phy_params)
-        E_pot = E_potential(U,E,S,bodyf_val)
+        E_pot = E_potential(U,E,S,phy_params)
         return [E_pot]
 
     def MaterialError_USnet(x,net_output):
@@ -349,11 +349,11 @@ def net_setup(net,net_type,bc_type,loss_type,geom,phy_params):
     return net,total_loss,bc,pde_net,energy_net,mat_net
 
 #Exact solution
-def set_exact_solution(net_type,params):
+def set_exact_solution(net_type,params,lib='np'):
     Q = params['Q']
 
     #Unet exact solution
-    def Unet_exact(x,lib='np'):
+    def Unet_exact(x,lib=lib):
         if lib == 'torch':
             cos,sin,pi,hstack = torch.cos,torch.sin,torch.pi,torch.hstack
         elif lib == 'np':
@@ -379,7 +379,7 @@ def set_exact_solution(net_type,params):
         S = S_nn((Exx,Eyy,Exy),params)
         Sxx, Syy, Sxy = S[0], S[1], S[2]
         return hstack((Ux.reshape(-1,1),Uy.reshape(-1,1),Sxx.reshape(-1,1),Syy.reshape(-1,1),Sxy.reshape(-1,1))) 
-
+    
     return Unet_exact if net_type == 'Unet' else USnet_exact
 
 def model_setup(geom,config,phy_params):
