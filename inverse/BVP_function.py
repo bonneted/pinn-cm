@@ -141,8 +141,8 @@ def E_nn(X,U):
     return Exx, Eyy, Exy
 
 def S_nn(E,params):
-    lmbd = params["lmbd"].detach()
-    mu = params["mu"].detach()
+    lmbd = params["lmbd"].cpu().detach()
+    mu = params["mu"].cpu().detach()
     #calculate the stress given the strain
     Sxx = (2 * mu + lmbd) * E[0] + lmbd * E[1]
     Syy = (2 * mu + lmbd) * E[1] + lmbd * E[0] 
