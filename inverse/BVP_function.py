@@ -36,17 +36,17 @@ def E_exact(X,params):
     return (Exx, Eyy, Exy)
 
 def S_exact(X,params):
-    lmbd = params["lmbd"]
-    mu = params["mu"]
+    lmbd = params["lmbd"].cpu().numpy()
+    mu = params["mu"].cpu().numpy()
     #stress S
-    Sxx = (lmbd + 2*mu) * E_exact(X)[0] + lmbd * E_exact(X)[1]
-    Syy = (lmbd + 2*mu) * E_exact(X)[1] + lmbd * E_exact(X)[0]
-    Sxy = 2*mu*E_exact(X)[2]
+    Sxx = (lmbd + 2*mu) * E_exact(X,params)[0] + lmbd * E_exact(X,params)[1]
+    Syy = (lmbd + 2*mu) * E_exact(X,params)[1] + lmbd * E_exact(X,params)[0]
+    Sxy = 2*mu*E_exact(X,params)[2]
     return (Sxx, Syy, Sxy)
 
 #plotting utilities
 
-def pcolor_plot(AX, X, Y, C, title,colormap="jet",**kwargs):
+def pcolor_plot(AX, X, Y, C, title,colormap="copper",**kwargs):
     ## plot the pcolor plot of the given data C on the given axis AX with the given title and optional colorbar limits cmin and cmax
     if len(kwargs) == 0:
         im = AX.pcolor(X, Y, C, cmap=colormap,shading='auto')
@@ -93,28 +93,29 @@ def plot_field(domain,model,output_func=None,V_exact=None,plot_diff=False,n_poin
     fig, ax = plt.subplots(n_fields, n_plot, figsize=(4*n_plot, 3*n_fields), dpi=200)
 
     for i in range(n_fields):
+        subax = ax if n_fields == 1 else ax[i] 
 
         if V_exact is not None:
 
             cmax = max(V_nn[i].max(), V_exact[i].max())
             cmin = min(V_nn[i].min(), V_exact[i].min())
 
-            im1 = pcolor_plot(ax[i][0], Xgrid, Ygrid, V_exact[i], f"{fields_name[i]}*",colormap="jet", cmin=cmin, cmax=cmax)
-            im2 = pcolor_plot(ax[i][1], Xgrid, Ygrid, V_nn[i], f"{fields_name[i]}_nn",colormap="jet", cmin=cmin, cmax=cmax)
+            im1 = pcolor_plot(subax[0], Xgrid, Ygrid, V_exact[i], f"{fields_name[i]}*", cmin=cmin, cmax=cmax)
+            im2 = pcolor_plot(subax[1], Xgrid, Ygrid, V_nn[i], f"{fields_name[i]}_nn", cmin=cmin, cmax=cmax)
 
-            fig.colorbar(im1, ax=ax[i][1])
+            fig.colorbar(im1, ax=subax[1])
         else:
-            im1 = pcolor_plot(ax[i], Xgrid, Ygrid, V_nn[i], f"{fields_name[i]}_nn")
-            fig.colorbar(im1, ax=ax[i])
+            im1 = pcolor_plot(subax, Xgrid, Ygrid, V_nn[i], f"{fields_name[i]}_nn")
+            fig.colorbar(im1, ax=subax)
 
         if plot_diff:
             diff = V_nn[i] - V_exact[i]
             abs_diff = np.abs(diff)
             cmax = abs_diff.max() if diff.max() > 0 else 0
             cmin = -abs_diff.max() if diff.min() < 0 else 0
-            im3 = pcolor_plot(ax[i][2], Xgrid, Ygrid,diff, f"{fields_name[i]}_nn - {fields_name[i]}*",colormap="jet", cmin=cmin, cmax=cmax)
-            fig.colorbar(im3, ax=ax[i][2])
-            ax[i][2].text(1.075,0.5,f"mean($\mid${fields_name[i]}_nn - {fields_name[i]}*$\mid$): {np.mean(abs_diff):.2e}", fontsize=6,ha = "center",rotation = "vertical",rotation_mode = "anchor")
+            im3 = pcolor_plot(subax[2], Xgrid, Ygrid,diff, f"{fields_name[i]}_nn - {fields_name[i]}*", cmin=cmin, cmax=cmax, colormap="coolwarm")
+            fig.colorbar(im3, ax=subax[2])
+            subax[2].text(1.075,0.5,f"mean($\mid${fields_name[i]}_nn - {fields_name[i]}*$\mid$): {np.mean(abs_diff):.2e}", fontsize=6,ha = "center",rotation = "vertical",rotation_mode = "anchor")
 
     return fig
 
@@ -141,8 +142,10 @@ def E_nn(X,U):
     return Exx, Eyy, Exy
 
 def S_nn(E,params):
+    
     lmbd = params["lmbd"].cpu().detach()
     mu = params["mu"].cpu().detach()
+    
     #calculate the stress given the strain
     Sxx = (2 * mu + lmbd) * E[0] + lmbd * E[1]
     Syy = (2 * mu + lmbd) * E[1] + lmbd * E[0] 
@@ -201,12 +204,16 @@ def Material_error(E,S,params):
     Sxy_pred = 2 * mu * E[2]
 
     Material_error = torch.square(Sxx - Sxx_pred) + torch.square(Syy - Syy_pred) + torch.square(Sxy - Sxy_pred)
+#     Material_error = [Sxx - Sxx_pred, Syy - Syy_pred, Sxy - Sxy_pred]
     return Material_error
 
 
 #setup the network architecture (loss and BCs)
-def net_setup(net,net_type,bc_type,loss_type,geom,phy_params):
-
+def net_setup(net,net_type,bc_type,loss_type,geom,phy_params,phy_params_trainable=None):
+    
+    if phy_params_trainable==None:
+        phy_params_trainable = phy_params
+        
     #Unet : displacement u_x and u_y are the output of the network
     def PDE_Unet(x,net_output):
         """"
@@ -215,8 +222,8 @@ def net_setup(net,net_type,bc_type,loss_type,geom,phy_params):
         return: the PDE loss
         """
         E = E_nn(x,net_output)
-        S = S_nn(E,phy_params)
-        pde = PDE(x,S,phy_params)
+        S = S_nn(E,phy_params_trainable)
+        pde = PDE(x,S,phy_params_trainable)
         return pde
 
     def Epot_Unet(x,net_output):
@@ -226,8 +233,8 @@ def net_setup(net,net_type,bc_type,loss_type,geom,phy_params):
         return: the potential energy
         """
         E = E_nn(x,net_output)
-        S = S_nn(E,phy_params)
-        E_pot = E_potential(x,net_output,S,phy_params)
+        S = S_nn(E,phy_params_trainable)
+        E_pot = E_potential(x,net_output,S,phy_params_trainable)
         return [E_pot]
 
     #USnet : displacement u_x, u_y, and stress S_xx, S_yy, S_xy are the output of the network
@@ -239,7 +246,7 @@ def net_setup(net,net_type,bc_type,loss_type,geom,phy_params):
         return: the PDE associated with the network
         """
         S = net_output[:,2], net_output[:,3], net_output[:,4]
-        pde = PDE(x,S,phy_params)
+        pde = PDE(x,S,phy_params_trainable)
         return pde
 
     def Epot_USnet(x,net_output):
@@ -250,9 +257,9 @@ def net_setup(net,net_type,bc_type,loss_type,geom,phy_params):
         """
         U = torch.hstack((net_output[:,0].reshape(-1,1),net_output[:,1].reshape(-1,1)))
         E = E_nn(x,U)
-        S = S_nn(E,phy_params)
-        bodyf_val = bodyf(x,phy_params)
-        E_pot = E_potential(U,E,S,phy_params)
+        S = S_nn(E,phy_params_trainable)
+        bodyf_val = bodyf(x,phy_params_trainable)
+        E_pot = E_potential(U,E,S,phy_params_trainable)
         return [E_pot]
 
     def MaterialError_USnet(x,net_output):
@@ -261,7 +268,7 @@ def net_setup(net,net_type,bc_type,loss_type,geom,phy_params):
         E = E_nn(x,U)
         S = net_output[:,2].reshape(-1,1), net_output[:,3].reshape(-1,1), net_output[:,4].reshape(-1,1)
 
-        return [Material_error(E,S,phy_params)]
+        return [Material_error(E,S,phy_params_trainable)]
 
     #Hard boundary conditions for Unet and USnet (for Unet, hard BCs are applied to displacement only -> soft BCs must be additionnaly applied to stress)
     def HardBC_Unet(x,net_output):  
