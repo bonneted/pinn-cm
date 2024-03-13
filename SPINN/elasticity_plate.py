@@ -6,9 +6,10 @@ References:
 """
 import deepxde as dde
 import numpy as np
+import time
+import os
 
-
-SPINN = True
+SPINN = False
 if SPINN:
     dde.config.set_default_autodiff("forward")
 
@@ -167,39 +168,128 @@ def pde(x, f):
 bc_type = "hard"
 if bc_type == "hard":
     bcs = []
+    num_boundary = 0
 else:
     bcs = [ux_top_bc, ux_bottom_bc, uy_left_bc, uy_bottom_bc, uy_right_bc, sxx_left_bc, sxx_right_bc, syy_top_bc]
+    num_boundary = 64 if SPINN else 500
 
-data = dde.data.PDE(
-    geom,
-    pde,
-    bcs,
-    num_domain=36**2,
-    num_boundary=0,
-    solution=func,
-    num_test=36**2,
-)
+
+def get_num_params(net, input_shape=None):
+    if dde.backend.backend_name == "pytorch":
+        return sum(p.numel() for p in net.parameters())
+    elif dde.backend.backend_name == "paddle":
+        return sum(p.numpy().size for p in net.parameters())
+    elif dde.backend.backend_name == "jax":
+        if input_shape is None:
+            raise ValueError("input_shape must be provided for jax backend")
+        import jax
+        import jax.numpy as jnp
+        rng = jax.random.PRNGKey(0)
+        return sum(p.size for p in jax.tree_leaves(net.init(rng, jnp.ones(input_shape))))
 
 activation = "tanh"
 initializer = "Glorot uniform"
 if SPINN:
     layers = [32, 32, 32, 32, 5]
     net = dde.nn.SPINN(layers, activation, initializer)
+    num_point = 64
+    total_points = num_point**2 + num_boundary**2
+    num_params = get_num_params(net, input_shape=layers[0])
+
 else:
     layers = [2, [40] * 5, [40] * 5, [40] * 5, [40] * 5, 5]
     net = dde.nn.PFNN(layers, activation, initializer)
+    num_point = 500
+    total_points = num_point + num_boundary
+    num_params = get_num_params(net, input_shape=layers[0])
+
+data = dde.data.PDE(
+    geom,
+    pde,
+    bcs,
+    num_domain=num_point,
+    num_boundary=num_boundary,
+    solution=func,
+    num_test=num_point,
+)
 
 if bc_type == "hard":
     net.apply_output_transform(HardBC)
 
 model = dde.Model(data, net)
 model.compile("adam", lr=0.001, metrics=["l2 relative error"])
-losshistory, train_state = model.train(iterations=5000, display_every=100)
 
-# if SPINN:
-#     dde.save_loss_history(losshistory, r"results/losshistory_SPINN.dat")
-#     dde.save_trainstate(train_state, r"results/trainstate_SPINN.dat")
-# else:
-#     dde.save_loss_history(losshistory, r"results/losshistory_PFNN.dat")
-    # dde.save_trainstate(train_state, r"results/trainstate_PFNN.dat")
-# dde.saveplot(losshistory, train_state, issave=True, isplot=True)
+n_iter = 100000
+start_time = time.time()
+losshistory, train_state = model.train(iterations=n_iter)
+elapsed = time.time() - start_time
+
+folder_name = "spinn" if SPINN else "pinn"
+dir_path = os.path.dirname(os.path.realpath(__file__))
+results_path = os.path.join(dir_path, "results")
+
+# Check if any folders with the same name exist
+existing_folders = [f for f in os.listdir(results_path) if f.startswith(folder_name)]
+
+# If there are existing folders, find the highest number suffix
+if existing_folders:
+    suffixes = [int(f.split('-')[-1]) for f in existing_folders if f != folder_name]
+    if suffixes:
+        max_suffix = max(suffixes)
+        folder_name = f"{folder_name}-{max_suffix + 1}"
+    else:
+        folder_name = f"{folder_name}-1"
+
+# Create the new folder
+new_folder_path = os.path.join(results_path, folder_name)
+if not os.path.exists(new_folder_path):
+    os.makedirs(new_folder_path)
+
+def log_config(fname):
+    import json
+    import os
+    import platform
+    import psutil
+
+    system_info = {
+        "OS": platform.system(),
+        "Release": platform.release(),
+        "Version": platform.version(),
+        "Machine": platform.machine(),
+        "Processor": platform.processor(),
+        "CPU count": psutil.cpu_count(),
+        "RAM": psutil.virtual_memory().total/(1024**3),
+    }   
+
+    if dde.backend.backend_name == "pytorch":
+        import torch
+
+        gpu_info = {
+            "GPU available": torch.cuda.is_available(),
+            "GPU device name": torch.cuda.get_device_name(0),
+            "GPU device count": torch.cuda.device_count(),
+            "CUDA version": torch.version.cuda,
+            "Torch version": torch.__version__,
+            "CUDNN version": torch.backends.cudnn.version()
+        }
+    else:
+        gpu_info = {}
+
+    execution_info = {
+        "n_iter": n_iter,
+        "elapsed": elapsed,
+        "iter_per_sec": n_iter/elapsed,
+        "backend_info": dde.backend.backend_name,
+        "batch_size": total_points,
+        "num_params": num_params,
+        "SPINN": SPINN,
+    }
+
+    info = {**system_info, **gpu_info, **execution_info}
+    info_json = json.dumps(info, indent=4)
+
+    with open(fname, "w") as f:
+        f.write(info_json)
+
+log_config(os.path.join(new_folder_path, "config.json"))
+dde.utils.save_loss_history(losshistory, os.path.join(new_folder_path, "loss_history.dat"))
