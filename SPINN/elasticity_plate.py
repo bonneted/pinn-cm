@@ -189,12 +189,14 @@ def get_num_params(net, input_shape=None):
 
 activation = "tanh"
 initializer = "Glorot uniform"
+optimizer = "adam"
 if SPINN:
     layers = [32, 32, 32, 32, 5]
     net = dde.nn.SPINN(layers, activation, initializer)
     num_point = 64
     total_points = num_point**2 + num_boundary**2
     num_params = get_num_params(net, input_shape=layers[0])
+    X_plot = np.stack([np.linspace(0, 1, 100)] * 2, axis=1)
 
 else:
     layers = [2, [40] * 5, [40] * 5, [40] * 5, [40] * 5, 5]
@@ -202,6 +204,9 @@ else:
     num_point = 500
     total_points = num_point + num_boundary
     num_params = get_num_params(net, input_shape=layers[0])
+    X_mesh = np.meshgrid(np.linspace(0, 1, 100, dtype=np.float32), np.linspace(0, 1, 100, dtype=np.float32), indexing='ij')
+    X_plot = np.stack((X_mesh[0].ravel(), X_mesh[1].ravel()), axis=1)
+
 
 data = dde.data.PDE(
     geom,
@@ -216,13 +221,6 @@ data = dde.data.PDE(
 if bc_type == "hard":
     net.apply_output_transform(HardBC)
 
-model = dde.Model(data, net)
-model.compile("adam", lr=0.001, metrics=["l2 relative error"])
-
-n_iter = 100000
-start_time = time.time()
-losshistory, train_state = model.train(iterations=n_iter)
-elapsed = time.time() - start_time
 
 folder_name = "spinn" if SPINN else "pinn"
 dir_path = os.path.dirname(os.path.realpath(__file__))
@@ -244,6 +242,17 @@ if existing_folders:
 new_folder_path = os.path.join(results_path, folder_name)
 if not os.path.exists(new_folder_path):
     os.makedirs(new_folder_path)
+
+
+Ux_history = dde.callbacks.OperatorPredictor(X_plot,lambda x, output: output[0][:,0], period=25, filename=os.path.join(new_folder_path, "Ux_history.dat")) 
+Uy_history = dde.callbacks.OperatorPredictor(X_plot,lambda x, output: output[0][:,1], period=25, filename=os.path.join(new_folder_path, "Uy_history.dat"))
+model = dde.Model(data, net)            
+model.compile(optimizer, lr=0.001, metrics=["l2 relative error"])
+
+n_iter = 10000
+start_time = time.time()
+losshistory, train_state = model.train(iterations=n_iter, callbacks=[Ux_history, Uy_history], display_every=25)
+elapsed = time.time() - start_time
 
 def log_config(fname):
     import json
@@ -279,9 +288,12 @@ def log_config(fname):
         "n_iter": n_iter,
         "elapsed": elapsed,
         "iter_per_sec": n_iter/elapsed,
-        "backend_info": dde.backend.backend_name,
+        "backend": dde.backend.backend_name,
         "batch_size": total_points,
         "num_params": num_params,
+        "activation": activation,
+        "initializer": initializer,
+        "optimizer": optimizer,
         "SPINN": SPINN,
     }
 
