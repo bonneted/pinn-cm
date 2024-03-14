@@ -9,7 +9,7 @@ import numpy as np
 import time
 import os
 
-SPINN = False
+SPINN = True
 if SPINN:
     dde.config.set_default_autodiff("forward")
 
@@ -81,10 +81,6 @@ syy_top_bc = dde.icbc.DirichletBC(
 )
 
 def HardBC(x,f):
-    if x.ndim == 1:
-       x = jnp.reshape(x, (1, -1))
-       f = jnp.reshape(f, (1, -1))
-
     if SPINN:
         x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:,0],x[:,1], indexing='ij')]
         x = stack(x_mesh, axis=-1)
@@ -95,7 +91,7 @@ def HardBC(x,f):
     Sxx = f[:,2]*x[:,0]*(1-x[:,0])
     Syy = f[:,3]*(1-x[:,1]) + (lmbd + 2*mu)*Q*sin(pi*x[:,0])
     Sxy = f[:,4] 
-    return stack((Ux,Uy,Sxx,Syy,Sxy),axis=1).squeeze()
+    return stack((Ux,Uy,Sxx,Syy,Sxy),axis=1)
 
 def fx(x):
     return (
@@ -249,14 +245,13 @@ Uy_history = dde.callbacks.OperatorPredictor(X_plot,lambda x, output: output[0][
 model = dde.Model(data, net)            
 model.compile(optimizer, lr=0.001, metrics=["l2 relative error"])
 
-n_iter = 10000
+n_iter = 1000
 start_time = time.time()
 losshistory, train_state = model.train(iterations=n_iter, callbacks=[Ux_history, Uy_history], display_every=25)
 elapsed = time.time() - start_time
 
 def log_config(fname):
     import json
-    import os
     import platform
     import psutil
 
