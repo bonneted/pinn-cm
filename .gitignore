@@ -2,3 +2,5 @@
 .vscode
 wandb/
 __pycache__/
+SPINN/results/
+SPINN/videos/
