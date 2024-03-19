@@ -4,13 +4,20 @@ Implementation of the linear elasticity 2D example in paper https://doi.org/10.1
 References:
     https://github.com/sciann/sciann-applications/blob/master/SciANN-Elasticity/Elasticity-Forward.ipynb.
 """
+
 import deepxde as dde
 import numpy as np
 import time
 import os
 
-SPINN = True
-if SPINN:
+n_iter = 200*5
+log_every = 25*5
+available_time = 2*5 #minutes
+log_output_fields = {0: "Ux", 1: "Uy"}  # 2: "Sxx", 3: "Syy", 4: "Sxy"}
+net_type = ["spinn", "pfnn"][0]
+bc_type = ["hard", "soft"][0]
+
+if net_type == "spinn":
     dde.config.set_default_autodiff("forward")
 
 lmbd = 1.0
@@ -43,10 +50,11 @@ def boundary_top(x, on_boundary):
 def boundary_bottom(x, on_boundary):
     return on_boundary and dde.utils.isclose(x[1], 0.0)
 
+
 # Exact solutions
 def func(x):
-    if SPINN:
-        x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:,0],x[:,1], indexing='ij')]
+    if net_type == "spinn":
+        x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:, 0], x[:, 1], indexing="ij")]
         x = stack(x_mesh, axis=-1)
 
     ux = np.cos(2 * np.pi * x[:, 0:1]) * np.sin(np.pi * x[:, 1:2])
@@ -80,18 +88,20 @@ syy_top_bc = dde.icbc.DirichletBC(
     component=3,
 )
 
-def HardBC(x,f):
-    if SPINN:
-        x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:,0],x[:,1], indexing='ij')]
+
+def HardBC(x, f):
+    if net_type == "spinn":
+        x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:, 0], x[:, 1], indexing="ij")]
         x = stack(x_mesh, axis=-1)
 
-    Ux = f[:,0]*x[:,1]*(1-x[:,1])
-    Uy = f[:,1]*x[:,0]*(1-x[:,0])*x[:,1]
+    Ux = f[:, 0] * x[:, 1] * (1 - x[:, 1])
+    Uy = f[:, 1] * x[:, 0] * (1 - x[:, 0]) * x[:, 1]
 
-    Sxx = f[:,2]*x[:,0]*(1-x[:,0])
-    Syy = f[:,3]*(1-x[:,1]) + (lmbd + 2*mu)*Q*sin(pi*x[:,0])
-    Sxy = f[:,4] 
-    return stack((Ux,Uy,Sxx,Syy,Sxy),axis=1)
+    Sxx = f[:, 2] * x[:, 0] * (1 - x[:, 0])
+    Syy = f[:, 3] * (1 - x[:, 1]) + (lmbd + 2 * mu) * Q * sin(pi * x[:, 0])
+    Sxy = f[:, 4]
+    return stack((Ux, Uy, Sxx, Syy, Sxy), axis=1)
+
 
 def fx(x):
     return (
@@ -124,16 +134,20 @@ def fy(x):
         + 6 * Q * mu * x[:, 1:2] ** 2 * sin(np.pi * x[:, 0:1])
     )
 
+
 def jacobian(f, x, i, j):
     if dde.backend.backend_name == "jax":
-        return dde.grad.jacobian(f, x, i=i, j=j)[0] # second element is the function used by jax to compute the gradients
+        return dde.grad.jacobian(f, x, i=i, j=j)[
+            0
+        ]  # second element is the function used by jax to compute the gradients
     else:
         return dde.grad.jacobian(f, x, i=i, j=j)
 
+
 def pde(x, f):
     # x_mesh = jnp.meshgrid(x[:,0].ravel(), x[:,0].ravel(), indexing='ij')
-    if SPINN:
-        x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:,0],x[:,1], indexing='ij')]
+    if net_type == "spinn":
+        x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:, 0], x[:, 1], indexing="ij")]
         x = stack(x_mesh, axis=1)
 
     E_xx = jacobian(f, x, i=0, j=0)
@@ -153,7 +167,7 @@ def pde(x, f):
     momentum_y = Sxy_x + Syy_y - fy(x)
 
     if dde.backend.backend_name == "jax":
-        f = f[0] # f[1] is the function used by jax to compute the gradients
+        f = f[0]  # f[1] is the function used by jax to compute the gradients
 
     stress_x = S_xx - f[:, 2:3]
     stress_y = S_yy - f[:, 3:4]
@@ -161,13 +175,22 @@ def pde(x, f):
 
     return [momentum_x, momentum_y, stress_x, stress_y, stress_xy]
 
-bc_type = "hard"
+
 if bc_type == "hard":
     bcs = []
     num_boundary = 0
 else:
-    bcs = [ux_top_bc, ux_bottom_bc, uy_left_bc, uy_bottom_bc, uy_right_bc, sxx_left_bc, sxx_right_bc, syy_top_bc]
-    num_boundary = 64 if SPINN else 500
+    bcs = [
+        ux_top_bc,
+        ux_bottom_bc,
+        uy_left_bc,
+        uy_bottom_bc,
+        uy_right_bc,
+        sxx_left_bc,
+        sxx_right_bc,
+        syy_top_bc,
+    ]
+    num_boundary = 64 if net_type == "spinn" else 500
 
 
 def get_num_params(net, input_shape=None):
@@ -180,13 +203,17 @@ def get_num_params(net, input_shape=None):
             raise ValueError("input_shape must be provided for jax backend")
         import jax
         import jax.numpy as jnp
+
         rng = jax.random.PRNGKey(0)
-        return sum(p.size for p in jax.tree_leaves(net.init(rng, jnp.ones(input_shape))))
+        return sum(
+            p.size for p in jax.tree_leaves(net.init(rng, jnp.ones(input_shape)))
+        )
+
 
 activation = "tanh"
 initializer = "Glorot uniform"
 optimizer = "adam"
-if SPINN:
+if net_type == "spinn":
     layers = [32, 32, 32, 32, 5]
     net = dde.nn.SPINN(layers, activation, initializer)
     num_point = 64
@@ -200,7 +227,11 @@ else:
     num_point = 500
     total_points = num_point + num_boundary
     num_params = get_num_params(net, input_shape=layers[0])
-    X_mesh = np.meshgrid(np.linspace(0, 1, 100, dtype=np.float32), np.linspace(0, 1, 100, dtype=np.float32), indexing='ij')
+    X_mesh = np.meshgrid(
+        np.linspace(0, 1, 100, dtype=np.float32),
+        np.linspace(0, 1, 100, dtype=np.float32),
+        indexing="ij",
+    )
     X_plot = np.stack((X_mesh[0].ravel(), X_mesh[1].ravel()), axis=1)
 
 
@@ -218,7 +249,7 @@ if bc_type == "hard":
     net.apply_output_transform(HardBC)
 
 
-folder_name = "spinn" if SPINN else "pinn"
+folder_name = f"{net_type}_{available_time if available_time else n_iter}{'min' if available_time else 'iter'}"
 dir_path = os.path.dirname(os.path.realpath(__file__))
 results_path = os.path.join(dir_path, "results")
 
@@ -227,7 +258,7 @@ existing_folders = [f for f in os.listdir(results_path) if f.startswith(folder_n
 
 # If there are existing folders, find the highest number suffix
 if existing_folders:
-    suffixes = [int(f.split('-')[-1]) for f in existing_folders if f != folder_name]
+    suffixes = [int(f.split("-")[-1]) for f in existing_folders if f != folder_name]
     if suffixes:
         max_suffix = max(suffixes)
         folder_name = f"{folder_name}-{max_suffix + 1}"
@@ -239,16 +270,34 @@ new_folder_path = os.path.join(results_path, folder_name)
 if not os.path.exists(new_folder_path):
     os.makedirs(new_folder_path)
 
+callbacks = [dde.callbacks.Timer(available_time)] if available_time else []
+# for i, field in log_output_fields.items():
+#     callbacks.append(dde.callbacks.OperatorPredictor(X_plot, output_op, period=log_every, filename=os.path.join(new_folder_path, f"{field}_history.dat")))
 
-Ux_history = dde.callbacks.OperatorPredictor(X_plot,lambda x, output: output[0][:,0], period=25, filename=os.path.join(new_folder_path, "Ux_history.dat")) 
-Uy_history = dde.callbacks.OperatorPredictor(X_plot,lambda x, output: output[0][:,1], period=25, filename=os.path.join(new_folder_path, "Uy_history.dat"))
-model = dde.Model(data, net)            
+Ux_history = dde.callbacks.OperatorPredictor(
+    X_plot,
+    lambda x, output: output[0][:, 0],
+    period=log_every,
+    filename=os.path.join(new_folder_path, "Ux_history.dat"),
+)
+Uy_history = dde.callbacks.OperatorPredictor(
+    X_plot,
+    lambda x, output: output[0][:, 1],
+    period=log_every,
+    filename=os.path.join(new_folder_path, "Uy_history.dat"),
+)
+
+callbacks += [Ux_history, Uy_history]
+
+model = dde.Model(data, net)
 model.compile(optimizer, lr=0.001, metrics=["l2 relative error"])
 
-n_iter = 1000
 start_time = time.time()
-losshistory, train_state = model.train(iterations=n_iter, callbacks=[Ux_history, Uy_history], display_every=25)
+losshistory, train_state = model.train(
+    iterations=n_iter, callbacks=callbacks, display_every=log_every
+)
 elapsed = time.time() - start_time
+
 
 def log_config(fname):
     import json
@@ -262,8 +311,8 @@ def log_config(fname):
         "Machine": platform.machine(),
         "Processor": platform.processor(),
         "CPU count": psutil.cpu_count(),
-        "RAM": psutil.virtual_memory().total/(1024**3),
-    }   
+        "RAM": psutil.virtual_memory().total / (1024**3),
+    }
 
     if dde.backend.backend_name == "pytorch":
         import torch
@@ -274,22 +323,24 @@ def log_config(fname):
             "GPU device count": torch.cuda.device_count(),
             "CUDA version": torch.version.cuda,
             "Torch version": torch.__version__,
-            "CUDNN version": torch.backends.cudnn.version()
+            "CUDNN version": torch.backends.cudnn.version(),
         }
     else:
         gpu_info = {}
 
     execution_info = {
-        "n_iter": n_iter,
+        "n_iter": train_state.epoch,
         "elapsed": elapsed,
-        "iter_per_sec": n_iter/elapsed,
+        "iter_per_sec": train_state.epoch / elapsed,
         "backend": dde.backend.backend_name,
         "batch_size": total_points,
         "num_params": num_params,
         "activation": activation,
         "initializer": initializer,
         "optimizer": optimizer,
-        "SPINN": SPINN,
+        "net_type": net_type,
+        "bc_type": bc_type,
+        "logged_fields": log_output_fields,
     }
 
     info = {**system_info, **gpu_info, **execution_info}
@@ -298,5 +349,8 @@ def log_config(fname):
     with open(fname, "w") as f:
         f.write(info_json)
 
+
 log_config(os.path.join(new_folder_path, "config.json"))
-dde.utils.save_loss_history(losshistory, os.path.join(new_folder_path, "loss_history.dat"))
+dde.utils.save_loss_history(
+    losshistory, os.path.join(new_folder_path, "loss_history.dat")
+)

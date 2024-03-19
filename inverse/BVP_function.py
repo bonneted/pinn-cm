@@ -2,7 +2,7 @@ import deepxde as dde
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import wandb
+# import wandb
 import argparse
 import os
 
