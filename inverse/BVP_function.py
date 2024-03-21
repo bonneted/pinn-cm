@@ -1,5 +1,5 @@
 from sys import path
-path.insert(0,r"C:\Users\u0150568\OneDrive - KU Leuven\Code\deepxde")
+# path.insert(0,r"C:\Users\u0150568\OneDrive - KU Leuven\Code\deepxde")
 import deepxde as dde
 import torch
 import numpy as np
