@@ -11,11 +11,16 @@ import time
 import os
 
 n_iter = 10000
-log_every = 25*2
+log_every = 25
 available_time = False# 2*5 #minutes
 log_output_fields = {0: "Ux", 1: "Uy", 2: "Sxx", 3: "Syy", 4: "Sxy"}
 net_type = ["spinn", "pfnn"][0]
 optimizers = ["adam", "LBFGS"][0]
+DIC_measure = True
+loss_weights = [1,1,1,1,1,1,1]
+
+if not DIC_measure:
+    loss_weights = loss_weights[:5]
 
 if net_type == "spinn":
     dde.config.set_default_autodiff("forward")
@@ -23,6 +28,7 @@ if net_type == "spinn":
 lmbd = 1.0
 mu = 0.5
 Q = 4.0
+
 
 sin = dde.backend.sin
 cos = dde.backend.cos
@@ -162,10 +168,8 @@ U_DIC = func(X_DIC_input)
 measure_Ux = dde.PointSetBC(X_DIC_input, U_DIC[:, 0:1], component=0)
 measure_Uy = dde.PointSetBC(X_DIC_input, U_DIC[:, 1:2], component=1)
 
-# measure_Ux = dde.PointSetOperatorBC(X_DIC_input, U_DIC[:, 0:1], lambda inputs,outputs,X: outputs[:,0:1])
-# measure_Uy = dde.PointSetOperatorBC(X_DIC_input, U_DIC[:, 1:2], lambda inputs,outputs,X: outputs[:,1:2])
-
-bcs = [measure_Ux, measure_Uy]
+if DIC_measure:
+    bcs += [measure_Ux, measure_Uy]
 
 
 
@@ -250,7 +254,6 @@ callbacks = [dde.callbacks.Timer(available_time)] if available_time else []
 for i, field in log_output_fields.items():
     callbacks.append(dde.callbacks.OperatorPredictor(X_plot, lambda x, output, i=i: output[0][:, i], period=log_every, filename=os.path.join(new_folder_path, f"{field}_history.dat")))
 
-loss_weights = [1,1,1,1,1,0,0]
 model = dde.Model(data, net)
 model.compile(optimizer, lr=0.01, metrics=["l2 relative error"], loss_weights=loss_weights)
 
@@ -301,7 +304,10 @@ def log_config(fname):
         "initializer": initializer,
         "optimizer": optimizer,
         "net_type": net_type,
+        "layers": layers,
         "logged_fields": log_output_fields,
+        "loss_weights": loss_weights,
+        "DIC_measure": DIC_measure,
     }
 
     info = {**system_info, **gpu_info, **execution_info}
