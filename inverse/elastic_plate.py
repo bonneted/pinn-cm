@@ -121,7 +121,8 @@ def jacobian(f, x, i, j):
         return dde.grad.jacobian(f, x, i=i, j=j)
 
 
-def pde(x, f):
+def pde(x, f, unknowns = [lmbd_trainable, mu_trainable]):
+    lmbd_trainable, mu_trainable = unknowns
     # x_mesh = jnp.meshgrid(x[:,0].ravel(), x[:,0].ravel(), indexing='ij')
     if net_type == "spinn":
         x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:, 0], x[:, 1], indexing="ij")]
@@ -265,11 +266,13 @@ model = dde.Model(data, net)
 model.compile(optimizer, lr=0.001, metrics=["l2 relative error"], external_trainable_variables=trainable_variables)#, loss_weights=loss_weights)
 
 # start_time = time.time()
-print(f"lambda:{lmbd_trainable:.3f}|{lmbd:.2f}; mu: {mu_trainable:.3f}|{mu:.2f}")
+trained_variables = model.external_trainable_variables
+print(f"lambda:{trained_variables[0]:.3f}|{lmbd:.2f}; mu: {trained_variables[1]:.3f}|{mu:.2f}")
 losshistory, train_state = model.train(
     iterations=n_iter, callbacks=callbacks, display_every=log_every
 )
-print(f"lambda:{lmbd_trainable:.3f}|{lmbd:.2f}; mu: {mu_trainable:.3f}|{mu:.2f}")
+trained_variables = model.external_trainable_variables
+print(f"lambda:{trained_variables[0]:.3f}|{lmbd:.2f}; mu: {trained_variables[1]:.3f}|{mu:.2f}")
 
 # elapsed = time.time() - start_time
 
