@@ -9,14 +9,27 @@ import deepxde as dde
 import numpy as np
 import time
 import os
+import sys
 
-n_iter = 100000
-n_DIC = 10
+if dde.backend.backend_name == "jax":
+    import jax
+    import jax.numpy as jnp 
+
+# Load noise strat from command line argument
+noise_strat = "diff"
+if len(sys.argv) > 1:
+    noise_strat = sys.argv[1]
+print(f"Using noise_strat={noise_strat}")
+
+n_iter = 100000*5
+n_DIC = 6
+noise_ratio = 0.1 # noise_ratio * std(U_DIC) is the noise floor
 log_every = 200
-available_time = False# 2*5 #minutes
-log_output_fields = {0: "Ux", 1: "Uy", 2: "Sxx", 3: "Syy", 4: "Sxy"}
-net_type = ["spinn", "pfnn"][0]
+available_time = [False, 100][1] #minutes
+log_output_fields = {}#{0: "Ux", 1: "Uy", 2: "Sxx", 3: "Syy", 4: "Sxy"}
+net_type = ["spinn", "pfnn"][1]
 optimizers = ["adam", "LBFGS"][0]
+# noise_strat = ["diff", "exponential", "threshold"][2]
 
 if net_type == "spinn":
     dde.config.set_default_autodiff("forward")
@@ -164,10 +177,24 @@ X_DIC_plot = np.stack(X_DIC_mesh, axis=1)
 if net_type != "spinn":
     X_DIC_input = X_DIC_plot
 
-U_DIC = func(X_DIC_input)
+U_DIC = func(X_DIC_input)[:,:2]
+noise_floor = noise_ratio * np.std(U_DIC)
+U_DIC += np.random.normal(0, noise_floor, U_DIC.shape)
 
-measure_Ux = dde.PointSetBC(X_DIC_input, U_DIC[:, 0:1], component=0)
-measure_Uy = dde.PointSetBC(X_DIC_input, U_DIC[:, 1:2], component=1)
+def residual_DIC(f, component=0, noise_floor=noise_floor, noise_strat=noise_strat): 
+    dist =  f[:, component:component+1] - U_DIC[:, component:component+1]
+    if noise_strat == "diff":
+        return dist
+    elif noise_strat == "exponential":
+        return dist*(1-jnp.exp(-(dist/noise_floor)**6))
+    elif noise_strat == "threshold":
+        return jnp.where(jnp.abs(dist) < noise_floor, 0, dist)
+
+# measure_Ux = dde.PointSetBC(X_DIC_input, U_DIC[:, 0:1], component=0)
+# measure_Uy = dde.PointSetBC(X_DIC_input, U_DIC[:, 1:2], component=1)
+
+measure_Ux = dde.PointSetOperatorBC(X_DIC_input, np.zeros_like(U_DIC[:, 0:1]), lambda inputs, f,X: residual_DIC(f, component=0))
+measure_Uy = dde.PointSetOperatorBC(X_DIC_input, np.zeros_like(U_DIC[:, 0:1]), lambda inputs, f,X: residual_DIC(f, component=1))
 
 bcs = [measure_Ux, measure_Uy]
 
@@ -179,9 +206,6 @@ def get_num_params(net, input_shape=None):
     elif dde.backend.backend_name == "jax":
         if input_shape is None:
             raise ValueError("input_shape must be provided for jax backend")
-        import jax
-        import jax.numpy as jnp
-
         rng = jax.random.PRNGKey(0)
         return sum(
             p.size for p in jax.tree.leaves(net.init(rng, jnp.ones(input_shape)))
@@ -227,7 +251,7 @@ data = dde.data.PDE(
 net.apply_output_transform(HardBC)
 
 
-folder_name = f"{net_type}_lmbd-{lmbd_start}_mu-{mu_start}_nDIC-{n_DIC**2}_{available_time if available_time else n_iter}{'min' if available_time else 'iter'}"
+folder_name = f"{net_type}_lmbd-{lmbd_start}_mu-{mu_start}_nDIC-{n_DIC**2}_noise-{noise_strat}-{noise_ratio}_{available_time if available_time else n_iter}{'min' if available_time else 'iter'}"
 dir_path = os.path.dirname(os.path.realpath(__file__))
 results_path = os.path.join(dir_path, "results")
 
@@ -304,6 +328,7 @@ def log_config(fname):
     execution_info = {
         "n_iter": train_state.epoch,
         "elapsed": elapsed,
+        "available_time": available_time,
         "iter_per_sec": train_state.epoch / elapsed,
         "backend": dde.backend.backend_name,
         "batch_size": total_points,
@@ -318,6 +343,9 @@ def log_config(fname):
         "lmbd_start": lmbd_start,
         "mu_start": mu_start,
         "n_DIC": n_DIC**2,
+        "noise_ratio": noise_ratio,
+        "noise_floor": noise_floor,
+        "noise_strat": noise_strat,
         "x_DIC": list(X_DIC_plot[:, 0]),
         "y_DIC": list(X_DIC_plot[:, 1]),
     }
