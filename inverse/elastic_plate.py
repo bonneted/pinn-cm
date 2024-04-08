@@ -16,20 +16,20 @@ if dde.backend.backend_name == "jax":
     import jax.numpy as jnp 
 
 # Load noise strat from command line argument
-noise_strat = "diff"
-if len(sys.argv) > 1:
-    noise_strat = sys.argv[1]
-print(f"Using noise_strat={noise_strat}")
 
-n_iter = 100000*5
+n_iter = 100000*100
 n_DIC = 6
 noise_ratio = 0.1 # noise_ratio * std(U_DIC) is the noise floor
 log_every = 200
-available_time = [False, 100][1] #minutes
+available_time = [False, 40][1] #minutes
 log_output_fields = {}#{0: "Ux", 1: "Uy", 2: "Sxx", 3: "Syy", 4: "Sxy"}
 net_type = ["spinn", "pfnn"][1]
 optimizers = ["adam", "LBFGS"][0]
-# noise_strat = ["diff", "exponential", "threshold"][2]
+noise_strat = ["diff", "exponential", "threshold"][0]
+
+if len(sys.argv) > 1:
+    noise_strat = sys.argv[1]
+
 
 if net_type == "spinn":
     dde.config.set_default_autodiff("forward")
@@ -181,20 +181,16 @@ U_DIC = func(X_DIC_input)[:,:2]
 noise_floor = noise_ratio * np.std(U_DIC)
 U_DIC += np.random.normal(0, noise_floor, U_DIC.shape)
 
-def residual_DIC(f, component=0, noise_floor=noise_floor, noise_strat=noise_strat): 
-    dist =  f[:, component:component+1] - U_DIC[:, component:component+1]
-    if noise_strat == "diff":
-        return dist
-    elif noise_strat == "exponential":
-        return dist*(1-jnp.exp(-(dist/noise_floor)**6))
+def loss_DIC(ref,dist, noise_floor=noise_floor, noise_strat=noise_strat): 
+    if noise_strat == "exponential":
+        dist = dist*(1-jnp.exp(-(dist/noise_floor)**6))
     elif noise_strat == "threshold":
-        return jnp.where(jnp.abs(dist) < noise_floor, 0, dist)
+        dist = jnp.where(jnp.abs(dist) < noise_floor, 0, dist)
+    
+    return dde.losses.mean_squared_error(ref, dist)
 
-# measure_Ux = dde.PointSetBC(X_DIC_input, U_DIC[:, 0:1], component=0)
-# measure_Uy = dde.PointSetBC(X_DIC_input, U_DIC[:, 1:2], component=1)
-
-measure_Ux = dde.PointSetOperatorBC(X_DIC_input, np.zeros_like(U_DIC[:, 0:1]), lambda inputs, f,X: residual_DIC(f, component=0))
-measure_Uy = dde.PointSetOperatorBC(X_DIC_input, np.zeros_like(U_DIC[:, 0:1]), lambda inputs, f,X: residual_DIC(f, component=1))
+measure_Ux = dde.PointSetBC(X_DIC_input, U_DIC[:, 0:1], component=0)
+measure_Uy = dde.PointSetBC(X_DIC_input, U_DIC[:, 1:2], component=1)
 
 bcs = [measure_Ux, measure_Uy]
 
@@ -280,9 +276,10 @@ for i, field in log_output_fields.items():
     callbacks.append(dde.callbacks.OperatorPredictor(X_plot, lambda x, output, i=i: output[0][:, i], period=log_every, filename=os.path.join(new_folder_path, f"{field}_history.dat")))
 
 # loss_weights = [1,1,1,1,1,1,1]
+loss_fn = ["MSE"]*5 + [loss_DIC]*2
 
 model = dde.Model(data, net)
-model.compile(optimizer, lr=0.001, metrics=["l2 relative error"], external_trainable_variables=trainable_variables)#, loss_weights=loss_weights)
+model.compile(optimizer, lr=0.001, metrics=["l2 relative error"], external_trainable_variables=trainable_variables, loss=loss_fn)#, loss_weights=loss_weights)
 
 start_time = time.time()
 trained_variables = model.external_trainable_variables

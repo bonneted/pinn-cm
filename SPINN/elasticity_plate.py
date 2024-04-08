@@ -10,11 +10,11 @@ import numpy as np
 import time
 import os
 
-n_iter = 200*5
-log_every = 25*5
-available_time = 2*5 #minutes
-log_output_fields = {0: "Ux", 1: "Uy"}  # 2: "Sxx", 3: "Syy", 4: "Sxy"}
-net_type = ["spinn", "pfnn"][0]
+n_iter = 1000000
+log_every = 100
+available_time = 60 #minutes
+log_output_fields = {}#0: "Ux", 1: "Uy"}  # 2: "Sxx", 3: "Syy", 4: "Sxy"}
+net_type = ["spinn", "pfnn"][1]
 bc_type = ["hard", "soft"][0]
 
 if net_type == "spinn":
