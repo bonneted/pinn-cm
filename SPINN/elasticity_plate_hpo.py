@@ -6,16 +6,19 @@ References:
 """
 
 import deepxde as dde
+import deepxde.backend as bkd
 import numpy as np
 import time
 import os
+from utils.elasticity_utils import PDE_USnet, Epot_USnet, MaterialError_USnet
 
-n_iter = 1000000
-log_every = 100
-available_time = 60 #minutes
-log_output_fields = {}#0: "Ux", 1: "Uy"}  # 2: "Sxx", 3: "Syy", 4: "Sxy"}
-net_type = ["spinn", "pfnn"][1]
+n_iter = 20000*5
+log_every = 25*4
+available_time = 2 #minutes
+log_output_fields = {0: "Ux", 1: "Uy"}  # 2: "Sxx", 3: "Syy", 4: "Sxy"}
+net_type = ["spinn", "pfnn"][0]
 bc_type = ["hard", "soft"][0]
+pde_type = ["PDE", "Energy"][0]
 
 if net_type == "spinn":
     dde.config.set_default_autodiff("forward")
@@ -33,23 +36,6 @@ if dde.backend.backend_name == "jax":
     import jax.numpy as jnp
 
 geom = dde.geometry.Rectangle([0, 0], [1, 1])
-
-
-def boundary_left(x, on_boundary):
-    return on_boundary and dde.utils.isclose(x[0], 0.0)
-
-
-def boundary_right(x, on_boundary):
-    return on_boundary and dde.utils.isclose(x[0], 1.0)
-
-
-def boundary_top(x, on_boundary):
-    return on_boundary and dde.utils.isclose(x[1], 1.0)
-
-
-def boundary_bottom(x, on_boundary):
-    return on_boundary and dde.utils.isclose(x[1], 0.0)
-
 
 # Exact solutions
 def func(x):
@@ -72,36 +58,6 @@ def func(x):
     Sxy = 2 * E_xy * mu
 
     return np.hstack((ux, uy, Sxx, Syy, Sxy))
-
-
-ux_top_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_top, component=0)
-ux_bottom_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_bottom, component=0)
-uy_left_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_left, component=1)
-uy_bottom_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_bottom, component=1)
-uy_right_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_right, component=1)
-sxx_left_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_left, component=2)
-sxx_right_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_right, component=2)
-syy_top_bc = dde.icbc.DirichletBC(
-    geom,
-    lambda x: (2 * mu + lmbd) * Q * np.sin(np.pi * x[:, 0:1]),
-    boundary_top,
-    component=3,
-)
-
-
-def HardBC(x, f):
-    if net_type == "spinn":
-        x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:, 0], x[:, 1], indexing="ij")]
-        x = stack(x_mesh, axis=-1)
-
-    Ux = f[:, 0] * x[:, 1] * (1 - x[:, 1])
-    Uy = f[:, 1] * x[:, 0] * (1 - x[:, 0]) * x[:, 1]
-
-    Sxx = f[:, 2] * x[:, 0] * (1 - x[:, 0])
-    Syy = f[:, 3] * (1 - x[:, 1]) + (lmbd + 2 * mu) * Q * sin(pi * x[:, 0])
-    Sxy = f[:, 4]
-    return stack((Ux, Uy, Sxx, Syy, Sxy), axis=1)
-
 
 def fx(x):
     return (
@@ -134,6 +90,19 @@ def fy(x):
         + 6 * Q * mu * x[:, 1:2] ** 2 * sin(np.pi * x[:, 0:1])
     )
 
+def HardBC(x, f):
+    if net_type == "spinn":
+        x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:, 0], x[:, 1], indexing="ij")]
+        x = stack(x_mesh, axis=-1)
+
+    Ux = f[:, 0] * x[:, 1] * (1 - x[:, 1])
+    Uy = f[:, 1] * x[:, 0] * (1 - x[:, 0]) * x[:, 1]
+
+    Sxx = f[:, 2] * x[:, 0] * (1 - x[:, 0])
+    Syy = f[:, 3] * (1 - x[:, 1]) + (lmbd + 2 * mu) * Q * sin(pi * x[:, 0])
+    Sxy = f[:, 4]
+    return stack((Ux, Uy, Sxx, Syy, Sxy), axis=1)
+
 
 def jacobian(f, x, i, j):
     if dde.backend.backend_name == "jax":
@@ -142,9 +111,8 @@ def jacobian(f, x, i, j):
         ]  # second element is the function used by jax to compute the gradients
     else:
         return dde.grad.jacobian(f, x, i=i, j=j)
-
-
-def pde(x, f):
+    
+def momentum_balance(x, f):
     # x_mesh = jnp.meshgrid(x[:,0].ravel(), x[:,0].ravel(), indexing='ij')
     if net_type == "spinn":
         x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:, 0], x[:, 1], indexing="ij")]
@@ -168,6 +136,10 @@ def pde(x, f):
 
     if dde.backend.backend_name == "jax":
         f = f[0]  # f[1] is the function used by jax to compute the gradients
+    
+    # strain_energy = 0.5 * (S_xx * E_xx + S_yy * E_yy + 2 * S_xy * E_xy)
+    # force_work = f[:, 0:1] * fx(x) + f[:, 1:2] * fy(x)
+    # E_pot = strain_energy - force_work + 10
 
     stress_x = S_xx - f[:, 2:3]
     stress_y = S_yy - f[:, 3:4]
@@ -175,22 +147,40 @@ def pde(x, f):
 
     return [momentum_x, momentum_y, stress_x, stress_y, stress_xy]
 
+def potential_energy(x, f):
+    if net_type == "spinn":
+        x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:, 0], x[:, 1], indexing="ij")]
+        x = stack(x_mesh, axis=1)
 
-if bc_type == "hard":
-    bcs = []
-    num_boundary = 0
-else:
-    bcs = [
-        ux_top_bc,
-        ux_bottom_bc,
-        uy_left_bc,
-        uy_bottom_bc,
-        uy_right_bc,
-        sxx_left_bc,
-        sxx_right_bc,
-        syy_top_bc,
-    ]
-    num_boundary = 64 if net_type == "spinn" else 500
+    E_xx = jacobian(f, x, i=0, j=0)
+    E_yy = jacobian(f, x, i=1, j=1)
+    E_xy = 0.5 * (jacobian(f, x, i=0, j=1) + jacobian(f, x, i=1, j=0))
+
+    S_xx = E_xx * (2 * mu + lmbd) + E_yy * lmbd
+    S_yy = E_yy * (2 * mu + lmbd) + E_xx * lmbd
+    S_xy = E_xy * 2 * mu
+
+    if dde.backend.backend_name == "jax":
+        f = f[0]  # f[1] is the function used by jax to compute the gradients
+    
+    # strain_energy = 0.5 * (S_xx * E_xx + S_yy * E_yy + 2 * S_xy * E_xy)
+    strain_energy = 0.5 * (f[:, 2:3] * E_xx + f[:, 3:4] * E_yy + 2 * f[:, 4:5] * E_xy)
+
+    force_work = f[:, 0:1] * fx(x) + f[:, 1:2] * fy(x)
+    E_pot = strain_energy - force_work + 10
+
+    stress_x = bkd.reduce_mean(bkd.square(S_xx - f[:, 2:3]))
+    stress_y = bkd.reduce_mean(bkd.square(S_yy - f[:, 3:4]))
+    stress_xy = bkd.reduce_mean(bkd.square(S_xy - f[:, 4:5]))
+
+    return [E_pot, stress_x, stress_y, stress_xy]
+
+
+pde = momentum_balance if pde_type == "PDE" else potential_energy
+
+bcs = []
+num_boundary = 0
+
 
 
 def get_num_params(net, input_shape=None):
@@ -206,7 +196,7 @@ def get_num_params(net, input_shape=None):
 
         rng = jax.random.PRNGKey(0)
         return sum(
-            p.size for p in jax.tree_leaves(net.init(rng, jnp.ones(input_shape)))
+            p.size for p in jax.tree.leaves(net.init(rng, jnp.ones(input_shape)))
         )
 
 
@@ -216,7 +206,7 @@ optimizer = "adam"
 if net_type == "spinn":
     layers = [32, 32, 32, 32, 5]
     net = dde.nn.SPINN(layers, activation, initializer)
-    num_point = 64
+    num_point = 100
     total_points = num_point**2 + num_boundary**2
     num_params = get_num_params(net, input_shape=layers[0])
     X_plot = np.stack([np.linspace(0, 1, 100)] * 2, axis=1)
@@ -243,13 +233,14 @@ data = dde.data.PDE(
     num_boundary=num_boundary,
     solution=func,
     num_test=num_point,
+    is_SPINN=net_type == "spinn",
 )
 
 if bc_type == "hard":
     net.apply_output_transform(HardBC)
 
 
-folder_name = f"{net_type}_{available_time if available_time else n_iter}{'min' if available_time else 'iter'}"
+folder_name = f"{net_type}_{pde_type}_{available_time if available_time else n_iter}{'min' if available_time else 'iter'}"
 dir_path = os.path.dirname(os.path.realpath(__file__))
 results_path = os.path.join(dir_path, "results")
 
@@ -271,26 +262,22 @@ if not os.path.exists(new_folder_path):
     os.makedirs(new_folder_path)
 
 callbacks = [dde.callbacks.Timer(available_time)] if available_time else []
-# for i, field in log_output_fields.items():
-#     callbacks.append(dde.callbacks.OperatorPredictor(X_plot, output_op, period=log_every, filename=os.path.join(new_folder_path, f"{field}_history.dat")))
+for i, field in log_output_fields.items():
+    output_op = lambda x, output, i=i: output[0][:, i]
+    callbacks.append(dde.callbacks.OperatorPredictor(X_plot, output_op, period=log_every, filename=os.path.join(new_folder_path, f"{field}_history.dat")))
 
-Ux_history = dde.callbacks.OperatorPredictor(
-    X_plot,
-    lambda x, output: output[0][:, 0],
-    period=log_every,
-    filename=os.path.join(new_folder_path, "Ux_history.dat"),
-)
-Uy_history = dde.callbacks.OperatorPredictor(
-    X_plot,
-    lambda x, output: output[0][:, 1],
-    period=log_every,
-    filename=os.path.join(new_folder_path, "Uy_history.dat"),
-)
+def loss_energy(y_pred, y_true): 
+    return bkd.sum((y_pred - y_true), dim = 0)
 
-callbacks += [Ux_history, Uy_history]
+def mean_squared_error(y_true, y_pred):
+    return bkd.reduce_mean(bkd.square(y_true - y_pred))
 
+# loss_MSE = dde.losses.mean_squared_error
+# loss_fn = [loss_energy] + [mean_squared_error] * 3 if pde_type == "Energy" else ["MSE"] * 5
+# loss_weights = [1e-10] + [1] * 5 if pde_type == "PDE" else [1] * 4
+loss_fn = "MSE"#loss_energy#["MSE"]*5 if pde_type == "PDE" else ["MSE"]*4
 model = dde.Model(data, net)
-model.compile(optimizer, lr=0.001, metrics=["l2 relative error"])
+model.compile(optimizer, lr=0.001, metrics=["l2 relative error"])#, loss=loss_fn)#, loss_weights=loss_weights
 
 start_time = time.time()
 losshistory, train_state = model.train(
@@ -341,6 +328,7 @@ def log_config(fname):
         "net_type": net_type,
         "bc_type": bc_type,
         "logged_fields": log_output_fields,
+        "pde_type": pde_type,
     }
 
     info = {**system_info, **gpu_info, **execution_info}

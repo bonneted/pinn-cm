@@ -10,12 +10,12 @@ import numpy as np
 import time
 import os
 
-n_iter = 1000000
-log_every = 100
-available_time = 60 #minutes
-log_output_fields = {}#0: "Ux", 1: "Uy"}  # 2: "Sxx", 3: "Syy", 4: "Sxy"}
-net_type = ["spinn", "pfnn"][1]
-bc_type = ["hard", "soft"][0]
+n_iter = 2000
+log_every = 25
+available_time = False# 2*5 #minutes
+log_output_fields = {0: "Ux", 1: "Uy", 2: "Sxx", 3: "Syy", 4: "Sxy"}
+net_type = ["spinn", "pfnn"][0]
+optimizers = ["adam", "LBFGS"][0]
 
 if net_type == "spinn":
     dde.config.set_default_autodiff("forward")
@@ -33,22 +33,6 @@ if dde.backend.backend_name == "jax":
     import jax.numpy as jnp
 
 geom = dde.geometry.Rectangle([0, 0], [1, 1])
-
-
-def boundary_left(x, on_boundary):
-    return on_boundary and dde.utils.isclose(x[0], 0.0)
-
-
-def boundary_right(x, on_boundary):
-    return on_boundary and dde.utils.isclose(x[0], 1.0)
-
-
-def boundary_top(x, on_boundary):
-    return on_boundary and dde.utils.isclose(x[1], 1.0)
-
-
-def boundary_bottom(x, on_boundary):
-    return on_boundary and dde.utils.isclose(x[1], 0.0)
 
 
 # Exact solutions
@@ -72,21 +56,6 @@ def func(x):
     Sxy = 2 * E_xy * mu
 
     return np.hstack((ux, uy, Sxx, Syy, Sxy))
-
-
-ux_top_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_top, component=0)
-ux_bottom_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_bottom, component=0)
-uy_left_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_left, component=1)
-uy_bottom_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_bottom, component=1)
-uy_right_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_right, component=1)
-sxx_left_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_left, component=2)
-sxx_right_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_right, component=2)
-syy_top_bc = dde.icbc.DirichletBC(
-    geom,
-    lambda x: (2 * mu + lmbd) * Q * np.sin(np.pi * x[:, 0:1]),
-    boundary_top,
-    component=3,
-)
 
 
 def HardBC(x, f):
@@ -176,21 +145,27 @@ def pde(x, f):
     return [momentum_x, momentum_y, stress_x, stress_y, stress_xy]
 
 
-if bc_type == "hard":
-    bcs = []
-    num_boundary = 0
-else:
-    bcs = [
-        ux_top_bc,
-        ux_bottom_bc,
-        uy_left_bc,
-        uy_bottom_bc,
-        uy_right_bc,
-        sxx_left_bc,
-        sxx_right_bc,
-        syy_top_bc,
-    ]
-    num_boundary = 64 if net_type == "spinn" else 500
+
+bcs = []
+num_boundary = 0
+
+n_DIC = 50
+# X_DIC = geom.uniform_points(1000, boundary=False)
+X_DIC_input = np.stack([np.linspace(0, 1, n_DIC)] * 2, axis=1)
+X_DIC_mesh = [x_.ravel() for x_ in np.meshgrid(X_DIC_input[:,0],X_DIC_input[:,1])]
+X_DIC_plot = stack(X_DIC_mesh, axis=-1)
+if net_type != "spinn":
+    X_DIC_input = X_DIC_plot
+U_DIC = func(X_DIC_input)
+
+measure_Ux = dde.PointSetBC(X_DIC_input, U_DIC[:, 0:1], component=0)
+measure_Uy = dde.PointSetBC(X_DIC_input, U_DIC[:, 1:2], component=1)
+
+# measure_Ux = dde.PointSetOperatorBC(X_DIC_input, U_DIC[:, 0:1], lambda inputs,outputs,X: outputs[:,0:1])
+# measure_Uy = dde.PointSetOperatorBC(X_DIC_input, U_DIC[:, 1:2], lambda inputs,outputs,X: outputs[:,1:2])
+
+bcs = [measure_Ux, measure_Uy]
+
 
 
 def get_num_params(net, input_shape=None):
@@ -245,8 +220,7 @@ data = dde.data.PDE(
     num_test=num_point,
 )
 
-if bc_type == "hard":
-    net.apply_output_transform(HardBC)
+net.apply_output_transform(HardBC)
 
 
 folder_name = f"{net_type}_{available_time if available_time else n_iter}{'min' if available_time else 'iter'}"
@@ -271,26 +245,12 @@ if not os.path.exists(new_folder_path):
     os.makedirs(new_folder_path)
 
 callbacks = [dde.callbacks.Timer(available_time)] if available_time else []
-# for i, field in log_output_fields.items():
-#     callbacks.append(dde.callbacks.OperatorPredictor(X_plot, output_op, period=log_every, filename=os.path.join(new_folder_path, f"{field}_history.dat")))
+for i, field in log_output_fields.items():
+    callbacks.append(dde.callbacks.OperatorPredictor(X_plot, lambda x, output, i=i: output[0][:, i], period=log_every, filename=os.path.join(new_folder_path, f"{field}_history.dat")))
 
-Ux_history = dde.callbacks.OperatorPredictor(
-    X_plot,
-    lambda x, output: output[0][:, 0],
-    period=log_every,
-    filename=os.path.join(new_folder_path, "Ux_history.dat"),
-)
-Uy_history = dde.callbacks.OperatorPredictor(
-    X_plot,
-    lambda x, output: output[0][:, 1],
-    period=log_every,
-    filename=os.path.join(new_folder_path, "Uy_history.dat"),
-)
-
-callbacks += [Ux_history, Uy_history]
-
+loss_weights = [1,1,1,1,1,1,1]
 model = dde.Model(data, net)
-model.compile(optimizer, lr=0.001, metrics=["l2 relative error"])
+model.compile(optimizer, lr=0.001, metrics=["l2 relative error"], loss_weights=loss_weights)
 
 start_time = time.time()
 losshistory, train_state = model.train(
@@ -339,7 +299,6 @@ def log_config(fname):
         "initializer": initializer,
         "optimizer": optimizer,
         "net_type": net_type,
-        "bc_type": bc_type,
         "logged_fields": log_output_fields,
     }
 

@@ -9,13 +9,27 @@ import deepxde as dde
 import numpy as np
 import time
 import os
+import sys
 
-n_iter = 1000000
-log_every = 100
-available_time = 60 #minutes
-log_output_fields = {}#0: "Ux", 1: "Uy"}  # 2: "Sxx", 3: "Syy", 4: "Sxy"}
+if dde.backend.backend_name == "jax":
+    import jax
+    import jax.numpy as jnp 
+
+# Load noise strat from command line argument
+
+n_iter = 100000*100
+n_DIC = 6
+noise_ratio = 0.1 # noise_ratio * std(U_DIC) is the noise floor
+log_every = 200
+available_time = [False, 40][1] #minutes
+log_output_fields = {}#{0: "Ux", 1: "Uy", 2: "Sxx", 3: "Syy", 4: "Sxy"}
 net_type = ["spinn", "pfnn"][1]
-bc_type = ["hard", "soft"][0]
+optimizers = ["adam", "LBFGS"][0]
+noise_strat = ["diff", "exponential", "threshold"][0]
+
+if len(sys.argv) > 1:
+    noise_strat = sys.argv[1]
+
 
 if net_type == "spinn":
     dde.config.set_default_autodiff("forward")
@@ -23,6 +37,12 @@ if net_type == "spinn":
 lmbd = 1.0
 mu = 0.5
 Q = 4.0
+
+# Trainable parameters
+lmbd_start = 2.0
+mu_start = 0.3
+lmbd_trainable = dde.Variable(lmbd_start)
+mu_trainable = dde.Variable(mu_start)
 
 sin = dde.backend.sin
 cos = dde.backend.cos
@@ -33,22 +53,6 @@ if dde.backend.backend_name == "jax":
     import jax.numpy as jnp
 
 geom = dde.geometry.Rectangle([0, 0], [1, 1])
-
-
-def boundary_left(x, on_boundary):
-    return on_boundary and dde.utils.isclose(x[0], 0.0)
-
-
-def boundary_right(x, on_boundary):
-    return on_boundary and dde.utils.isclose(x[0], 1.0)
-
-
-def boundary_top(x, on_boundary):
-    return on_boundary and dde.utils.isclose(x[1], 1.0)
-
-
-def boundary_bottom(x, on_boundary):
-    return on_boundary and dde.utils.isclose(x[1], 0.0)
 
 
 # Exact solutions
@@ -72,21 +76,6 @@ def func(x):
     Sxy = 2 * E_xy * mu
 
     return np.hstack((ux, uy, Sxx, Syy, Sxy))
-
-
-ux_top_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_top, component=0)
-ux_bottom_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_bottom, component=0)
-uy_left_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_left, component=1)
-uy_bottom_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_bottom, component=1)
-uy_right_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_right, component=1)
-sxx_left_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_left, component=2)
-sxx_right_bc = dde.icbc.DirichletBC(geom, lambda x: 0, boundary_right, component=2)
-syy_top_bc = dde.icbc.DirichletBC(
-    geom,
-    lambda x: (2 * mu + lmbd) * Q * np.sin(np.pi * x[:, 0:1]),
-    boundary_top,
-    component=3,
-)
 
 
 def HardBC(x, f):
@@ -144,7 +133,8 @@ def jacobian(f, x, i, j):
         return dde.grad.jacobian(f, x, i=i, j=j)
 
 
-def pde(x, f):
+def pde(x, f, unknowns = [lmbd_trainable, mu_trainable]):
+    lmbd_trainable, mu_trainable = unknowns
     # x_mesh = jnp.meshgrid(x[:,0].ravel(), x[:,0].ravel(), indexing='ij')
     if net_type == "spinn":
         x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:, 0], x[:, 1], indexing="ij")]
@@ -154,9 +144,9 @@ def pde(x, f):
     E_yy = jacobian(f, x, i=1, j=1)
     E_xy = 0.5 * (jacobian(f, x, i=0, j=1) + jacobian(f, x, i=1, j=0))
 
-    S_xx = E_xx * (2 * mu + lmbd) + E_yy * lmbd
-    S_yy = E_yy * (2 * mu + lmbd) + E_xx * lmbd
-    S_xy = E_xy * 2 * mu
+    S_xx = E_xx * (2 * mu_trainable + lmbd_trainable) + E_yy * lmbd_trainable
+    S_yy = E_yy * (2 * mu_trainable + lmbd_trainable) + E_xx * lmbd_trainable
+    S_xy = E_xy * 2 * mu_trainable
 
     Sxx_x = jacobian(f, x, i=2, j=0)
     Syy_y = jacobian(f, x, i=3, j=1)
@@ -176,22 +166,33 @@ def pde(x, f):
     return [momentum_x, momentum_y, stress_x, stress_y, stress_xy]
 
 
-if bc_type == "hard":
-    bcs = []
-    num_boundary = 0
-else:
-    bcs = [
-        ux_top_bc,
-        ux_bottom_bc,
-        uy_left_bc,
-        uy_bottom_bc,
-        uy_right_bc,
-        sxx_left_bc,
-        sxx_right_bc,
-        syy_top_bc,
-    ]
-    num_boundary = 64 if net_type == "spinn" else 500
 
+bcs = []
+num_boundary = 0
+
+# X_DIC = geom.uniform_points(1000, boundary=False)
+X_DIC_input = np.stack([np.linspace(0, 1, n_DIC)] * 2, axis=1)
+X_DIC_mesh = [x_.ravel() for x_ in np.meshgrid(X_DIC_input[:,0],X_DIC_input[:,1],indexing="ij")]
+X_DIC_plot = np.stack(X_DIC_mesh, axis=1)
+if net_type != "spinn":
+    X_DIC_input = X_DIC_plot
+
+U_DIC = func(X_DIC_input)[:,:2]
+noise_floor = noise_ratio * np.std(U_DIC)
+U_DIC += np.random.normal(0, noise_floor, U_DIC.shape)
+
+def loss_DIC(ref,dist, noise_floor=noise_floor, noise_strat=noise_strat): 
+    if noise_strat == "exponential":
+        dist = dist*(1-jnp.exp(-(dist/noise_floor)**6))
+    elif noise_strat == "threshold":
+        dist = jnp.where(jnp.abs(dist) < noise_floor, 0, dist)
+    
+    return dde.losses.mean_squared_error(ref, dist)
+
+measure_Ux = dde.PointSetBC(X_DIC_input, U_DIC[:, 0:1], component=0)
+measure_Uy = dde.PointSetBC(X_DIC_input, U_DIC[:, 1:2], component=1)
+
+bcs = [measure_Ux, measure_Uy]
 
 def get_num_params(net, input_shape=None):
     if dde.backend.backend_name == "pytorch":
@@ -201,12 +202,9 @@ def get_num_params(net, input_shape=None):
     elif dde.backend.backend_name == "jax":
         if input_shape is None:
             raise ValueError("input_shape must be provided for jax backend")
-        import jax
-        import jax.numpy as jnp
-
         rng = jax.random.PRNGKey(0)
         return sum(
-            p.size for p in jax.tree_leaves(net.init(rng, jnp.ones(input_shape)))
+            p.size for p in jax.tree.leaves(net.init(rng, jnp.ones(input_shape)))
         )
 
 
@@ -243,13 +241,13 @@ data = dde.data.PDE(
     num_boundary=num_boundary,
     solution=func,
     num_test=num_point,
+    is_SPINN=net_type == "spinn",
 )
 
-if bc_type == "hard":
-    net.apply_output_transform(HardBC)
+net.apply_output_transform(HardBC)
 
 
-folder_name = f"{net_type}_{available_time if available_time else n_iter}{'min' if available_time else 'iter'}"
+folder_name = f"{net_type}_lmbd-{lmbd_start}_mu-{mu_start}_nDIC-{n_DIC**2}_noise-{noise_strat}-{noise_ratio}_{available_time if available_time else n_iter}{'min' if available_time else 'iter'}"
 dir_path = os.path.dirname(os.path.realpath(__file__))
 results_path = os.path.join(dir_path, "results")
 
@@ -270,32 +268,28 @@ new_folder_path = os.path.join(results_path, folder_name)
 if not os.path.exists(new_folder_path):
     os.makedirs(new_folder_path)
 
-callbacks = [dde.callbacks.Timer(available_time)] if available_time else []
-# for i, field in log_output_fields.items():
-#     callbacks.append(dde.callbacks.OperatorPredictor(X_plot, output_op, period=log_every, filename=os.path.join(new_folder_path, f"{field}_history.dat")))
+trainable_variables = [lmbd_trainable, mu_trainable]
+callbacks = [dde.callbacks.VariableValue([lmbd_trainable, mu_trainable], period=log_every, filename=os.path.join(new_folder_path, "variables_history.dat"))]
+if available_time:
+    callbacks.append(dde.callbacks.Timer(available_time))
+for i, field in log_output_fields.items():
+    callbacks.append(dde.callbacks.OperatorPredictor(X_plot, lambda x, output, i=i: output[0][:, i], period=log_every, filename=os.path.join(new_folder_path, f"{field}_history.dat")))
 
-Ux_history = dde.callbacks.OperatorPredictor(
-    X_plot,
-    lambda x, output: output[0][:, 0],
-    period=log_every,
-    filename=os.path.join(new_folder_path, "Ux_history.dat"),
-)
-Uy_history = dde.callbacks.OperatorPredictor(
-    X_plot,
-    lambda x, output: output[0][:, 1],
-    period=log_every,
-    filename=os.path.join(new_folder_path, "Uy_history.dat"),
-)
-
-callbacks += [Ux_history, Uy_history]
+# loss_weights = [1,1,1,1,1,1,1]
+loss_fn = ["MSE"]*5 + [loss_DIC]*2
 
 model = dde.Model(data, net)
-model.compile(optimizer, lr=0.001, metrics=["l2 relative error"])
+model.compile(optimizer, lr=0.001, metrics=["l2 relative error"], external_trainable_variables=trainable_variables, loss=loss_fn)#, loss_weights=loss_weights)
 
 start_time = time.time()
+trained_variables = model.external_trainable_variables
+print(f"lambda:{trained_variables[0]:.3f}|{lmbd:.2f}; mu: {trained_variables[1]:.3f}|{mu:.2f}")
 losshistory, train_state = model.train(
     iterations=n_iter, callbacks=callbacks, display_every=log_every
 )
+trained_variables = model.external_trainable_variables
+print(f"lambda:{trained_variables[0]:.3f}|{lmbd:.2f}; mu: {trained_variables[1]:.3f}|{mu:.2f}")
+
 elapsed = time.time() - start_time
 
 
@@ -331,6 +325,7 @@ def log_config(fname):
     execution_info = {
         "n_iter": train_state.epoch,
         "elapsed": elapsed,
+        "available_time": available_time,
         "iter_per_sec": train_state.epoch / elapsed,
         "backend": dde.backend.backend_name,
         "batch_size": total_points,
@@ -339,8 +334,17 @@ def log_config(fname):
         "initializer": initializer,
         "optimizer": optimizer,
         "net_type": net_type,
-        "bc_type": bc_type,
         "logged_fields": log_output_fields,
+        "lmbd_actual": lmbd,
+        "mu_actual": mu,
+        "lmbd_start": lmbd_start,
+        "mu_start": mu_start,
+        "n_DIC": n_DIC**2,
+        "noise_ratio": noise_ratio,
+        "noise_floor": noise_floor,
+        "noise_strat": noise_strat,
+        "x_DIC": list(X_DIC_plot[:, 0]),
+        "y_DIC": list(X_DIC_plot[:, 1]),
     }
 
     info = {**system_info, **gpu_info, **execution_info}
