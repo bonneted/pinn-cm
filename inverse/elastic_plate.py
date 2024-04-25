@@ -17,19 +17,19 @@ if dde.backend.backend_name == "jax":
 
 # Load noise strat from command line argument
 
-n_iter = 100000*100
+n_iter = 10000
 n_DIC = 6
 noise_ratio = 0.1 # noise_ratio * std(U_DIC) is the noise floor
 log_every = 200
-available_time = [False, 40][1] #minutes
+available_time = [False, 40][0] #minutes
 log_output_fields = {}#{0: "Ux", 1: "Uy", 2: "Sxx", 3: "Syy", 4: "Sxy"}
-net_type = ["spinn", "pfnn"][1]
+net_type = ["spinn", "pfnn"][0]
 optimizers = ["adam", "LBFGS"][0]
 noise_strat = ["diff", "exponential", "threshold"][0]
+mlp = ["mlp", "modified_mlp"][0]
 
 if len(sys.argv) > 1:
     noise_strat = sys.argv[1]
-
 
 if net_type == "spinn":
     dde.config.set_default_autodiff("forward")
@@ -212,8 +212,8 @@ activation = "tanh"
 initializer = "Glorot uniform"
 optimizer = "adam"
 if net_type == "spinn":
-    layers = [32, 32, 32, 32, 5]
-    net = dde.nn.SPINN(layers, activation, initializer)
+    layers = [2, 32, 32, 32, 32, 5]
+    net = dde.nn.SPINN(layers, activation, initializer,mlp)
     num_point = 64
     total_points = num_point**2 + num_boundary**2
     num_params = get_num_params(net, input_shape=layers[0])
@@ -334,6 +334,7 @@ def log_config(fname):
         "initializer": initializer,
         "optimizer": optimizer,
         "net_type": net_type,
+        "mlp": mlp,
         "logged_fields": log_output_fields,
         "lmbd_actual": lmbd,
         "mu_actual": mu,
