@@ -10,12 +10,13 @@ import numpy as np
 import time
 import os
 
-n_iter = 1000000
+n_iter = 10000
 log_every = 100
-available_time = 60 #minutes
+available_time = None#60 #minutes
 log_output_fields = {}#0: "Ux", 1: "Uy"}  # 2: "Sxx", 3: "Syy", 4: "Sxy"}
-net_type = ["spinn", "pfnn"][1]
+net_type = ["spinn", "pfnn"][0]
 bc_type = ["hard", "soft"][0]
+mlp = ["mlp", "modified_mlp"][0]
 
 if net_type == "spinn":
     dde.config.set_default_autodiff("forward")
@@ -147,8 +148,8 @@ def jacobian(f, x, i, j):
 def pde(x, f):
     # x_mesh = jnp.meshgrid(x[:,0].ravel(), x[:,0].ravel(), indexing='ij')
     if net_type == "spinn":
-        x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:, 0], x[:, 1], indexing="ij")]
-        x = stack(x_mesh, axis=1)
+        x_mesh = [x_.reshape(-1) for x_ in jnp.meshgrid(x[:, 0], x[:, 1], indexing="ij")]
+        x = stack(x_mesh, axis=-1)
 
     E_xx = jacobian(f, x, i=0, j=0)
     E_yy = jacobian(f, x, i=1, j=1)
@@ -214,8 +215,8 @@ activation = "tanh"
 initializer = "Glorot uniform"
 optimizer = "adam"
 if net_type == "spinn":
-    layers = [32, 32, 32, 32, 5]
-    net = dde.nn.SPINN(layers, activation, initializer)
+    layers = [2, 32, 32, 32, 32, 5]
+    net = dde.nn.SPINN(layers, activation, initializer, mlp)
     num_point = 64
     total_points = num_point**2 + num_boundary**2
     num_params = get_num_params(net, input_shape=layers[0])
@@ -339,6 +340,7 @@ def log_config(fname):
         "initializer": initializer,
         "optimizer": optimizer,
         "net_type": net_type,
+        "mlp": mlp,
         "bc_type": bc_type,
         "logged_fields": log_output_fields,
     }

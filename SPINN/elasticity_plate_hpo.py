@@ -10,7 +10,6 @@ import deepxde.backend as bkd
 import numpy as np
 import time
 import os
-from utils.elasticity_utils import PDE_USnet, Epot_USnet, MaterialError_USnet
 
 n_iter = 20000*5
 log_every = 25*4
@@ -137,15 +136,15 @@ def momentum_balance(x, f):
     if dde.backend.backend_name == "jax":
         f = f[0]  # f[1] is the function used by jax to compute the gradients
     
-    # strain_energy = 0.5 * (S_xx * E_xx + S_yy * E_yy + 2 * S_xy * E_xy)
-    # force_work = f[:, 0:1] * fx(x) + f[:, 1:2] * fy(x)
-    # E_pot = strain_energy - force_work + 10
+    strain_energy = 0.5 * (S_xx * E_xx + S_yy * E_yy + 2 * S_xy * E_xy)
+    force_work = f[:, 0:1] * fx(x) + f[:, 1:2] * fy(x)
+    E_pot = strain_energy - force_work + 10
 
     stress_x = S_xx - f[:, 2:3]
     stress_y = S_yy - f[:, 3:4]
     stress_xy = S_xy - f[:, 4:5]
 
-    return [momentum_x, momentum_y, stress_x, stress_y, stress_xy]
+    return [E_pot,momentum_x, momentum_y, stress_x, stress_y, stress_xy]
 
 def potential_energy(x, f):
     if net_type == "spinn":
@@ -169,9 +168,9 @@ def potential_energy(x, f):
     force_work = f[:, 0:1] * fx(x) + f[:, 1:2] * fy(x)
     E_pot = strain_energy - force_work + 10
 
-    stress_x = bkd.reduce_mean(bkd.square(S_xx - f[:, 2:3]))
-    stress_y = bkd.reduce_mean(bkd.square(S_yy - f[:, 3:4]))
-    stress_xy = bkd.reduce_mean(bkd.square(S_xy - f[:, 4:5]))
+    stress_x = S_xx - f[:, 2:3]
+    stress_y = S_yy - f[:, 3:4]
+    stress_xy = S_xy - f[:, 4:5]
 
     return [E_pot, stress_x, stress_y, stress_xy]
 
@@ -267,17 +266,18 @@ for i, field in log_output_fields.items():
     callbacks.append(dde.callbacks.OperatorPredictor(X_plot, output_op, period=log_every, filename=os.path.join(new_folder_path, f"{field}_history.dat")))
 
 def loss_energy(y_pred, y_true): 
-    return bkd.sum((y_pred - y_true), dim = 0)
+    loss = bkd.reduce_mean(y_pred - y_true)
+    return loss
 
 def mean_squared_error(y_true, y_pred):
     return bkd.reduce_mean(bkd.square(y_true - y_pred))
 
 # loss_MSE = dde.losses.mean_squared_error
-# loss_fn = [loss_energy] + [mean_squared_error] * 3 if pde_type == "Energy" else ["MSE"] * 5
-# loss_weights = [1e-10] + [1] * 5 if pde_type == "PDE" else [1] * 4
-loss_fn = "MSE"#loss_energy#["MSE"]*5 if pde_type == "PDE" else ["MSE"]*4
+loss_fn = [loss_energy] + ["MSE"] * 3 if pde_type == "Energy" else [loss_energy] + ["MSE"] * 5
+loss_weights = [1e-5] + [1] * 3 if pde_type == "Energy" else [1e-20]+[1] * 5
+# loss_fn = "MSE"#loss_energy#["MSE"]*5 if pde_type == "PDE" else ["MSE"]*4
 model = dde.Model(data, net)
-model.compile(optimizer, lr=0.001, metrics=["l2 relative error"])#, loss=loss_fn)#, loss_weights=loss_weights
+model.compile(optimizer, lr=0.001, metrics=["l2 relative error"], loss=loss_fn, loss_weights=loss_weights)
 
 start_time = time.time()
 losshistory, train_state = model.train(
@@ -328,7 +328,7 @@ def log_config(fname):
         "net_type": net_type,
         "bc_type": bc_type,
         "logged_fields": log_output_fields,
-        "pde_type": pde_type,
+        "physic_loss": pde_type,
     }
 
     info = {**system_info, **gpu_info, **execution_info}
