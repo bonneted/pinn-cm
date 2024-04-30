@@ -244,6 +244,7 @@ data = dde.data.PDE(
     num_boundary=num_boundary,
     solution=func,
     num_test=num_point,
+    is_SPINN=net_type == "spinn",
 )
 
 if bc_type == "hard":
