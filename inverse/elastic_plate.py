@@ -17,13 +17,13 @@ if dde.backend.backend_name == "jax":
 
 # Load noise strat from command line argument
 
-n_iter = 10000
+n_iter = int(1e10)
 n_DIC = 6
-noise_ratio = 0.1 # noise_ratio * std(U_DIC) is the noise floor
-log_every = 200
-available_time = [False, 40][0] #minutes
-log_output_fields = {}#{0: "Ux", 1: "Uy", 2: "Sxx", 3: "Syy", 4: "Sxy"}
-net_type = ["spinn", "pfnn"][0]
+noise_ratio = 0#0.1 # noise_ratio * std(U_DIC) is the noise floor
+log_every = 1000
+available_time = [False, 10][1] #minutes
+log_output_fields = {0: "Ux", 1: "Uy", 2: "Sxx", 3: "Syy", 4: "Sxy"}
+net_type = ["spinn", "pfnn"][1]
 optimizers = ["adam", "LBFGS"][0]
 noise_strat = ["diff", "exponential", "threshold"][0]
 mlp = ["mlp", "modified_mlp"][0]
@@ -39,10 +39,11 @@ mu = 0.5
 Q = 4.0
 
 # Trainable parameters
+variable_training_factor = 1e-1
 lmbd_start = 2.0
 mu_start = 0.3
-lmbd_trainable = dde.Variable(lmbd_start)
-mu_trainable = dde.Variable(mu_start)
+lmbd_trainable = dde.Variable(lmbd_start/variable_training_factor)#,update_factor=variable_training_factor)
+mu_trainable = dde.Variable(mu_start/variable_training_factor)#, update_factor=variable_training_factor)
 
 sin = dde.backend.sin
 cos = dde.backend.cos
@@ -134,7 +135,7 @@ def jacobian(f, x, i, j):
 
 
 def pde(x, f, unknowns = [lmbd_trainable, mu_trainable]):
-    lmbd_trainable, mu_trainable = unknowns
+    lmbd_trainable, mu_trainable = unknowns[0]*variable_training_factor, unknowns[1]*variable_training_factor
     # x_mesh = jnp.meshgrid(x[:,0].ravel(), x[:,0].ravel(), indexing='ij')
     if net_type == "spinn":
         x_mesh = [x_.ravel() for x_ in jnp.meshgrid(x[:, 0], x[:, 1], indexing="ij")]
@@ -283,12 +284,12 @@ model.compile(optimizer, lr=0.001, metrics=["l2 relative error"], external_train
 
 start_time = time.time()
 trained_variables = model.external_trainable_variables
-print(f"lambda:{trained_variables[0]:.3f}|{lmbd:.2f}; mu: {trained_variables[1]:.3f}|{mu:.2f}")
+print(f"lambda:{trained_variables[0].value:.3f}|{lmbd:.2f}; mu: {trained_variables[1].value:.3f}|{mu:.2f}")
 losshistory, train_state = model.train(
     iterations=n_iter, callbacks=callbacks, display_every=log_every
 )
 trained_variables = model.external_trainable_variables
-print(f"lambda:{trained_variables[0]:.3f}|{lmbd:.2f}; mu: {trained_variables[1]:.3f}|{mu:.2f}")
+print(f"lambda:{trained_variables[0].value:.3f}|{lmbd:.2f}; mu: {trained_variables[1].value:.3f}|{mu:.2f}")
 
 elapsed = time.time() - start_time
 
@@ -340,6 +341,7 @@ def log_config(fname):
         "mu_actual": mu,
         "lmbd_start": lmbd_start,
         "mu_start": mu_start,
+        "variable_training_factor": variable_training_factor,
         "n_DIC": n_DIC**2,
         "noise_ratio": noise_ratio,
         "noise_floor": noise_floor,
